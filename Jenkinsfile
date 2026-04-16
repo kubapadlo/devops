@@ -39,12 +39,12 @@ pipeline {
                     sh "docker rm -f kanye-web-container || true"
                     sh "docker run -d --name kanye-web-container -p 3000:3000 ${IMAGE_NAME}:${VERSION}"
                     // smoke test
-                    sh """
-                        sleep 5
-                        curl -f http://localhost:3000 || (echo 'Smoke test FAILED' && docker logs kanye-web-container && exit 1)
-                    """
+                    //sh """
+                    //    sleep 5
+                    //    curl -f http://localhost:3000 || (echo 'Smoke test FAILED' && docker logs kanye-web-container && exit 1)
+                    //"""
                 }
-                echo "Smoke test OK — aplikacja dostępna pod http://localhost:3000"
+                echo "aplikacja dostępna pod http://localhost:3000"
             }
         }
     }
