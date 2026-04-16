@@ -3,6 +3,7 @@ pipeline {
 
     environment {
         IMAGE_NAME = "kanye-counter-local"
+        VERSION    = "1.0.${BUILD_NUMBER}"  // Wbudowana zmienna
     }
 
     stages {
@@ -14,14 +15,21 @@ pipeline {
 
         stage('Build & Test') {
             steps {
-                sh "docker build -t ${IMAGE_NAME} ."
+                sh """
+                    docker build \
+                    --build-arg GIT_COMMIT=\$(git rev-parse --short HEAD) \
+                    --build-arg BUILD_NUMBER=${BUILD_NUMBER} \
+                    --build-arg BUILD_DATE=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+                    -t ${IMAGE_NAME} .
+                """
             }
         }
 
         stage('Publish (Local)') {
             steps {
+                sh "docker tag ${IMAGE_NAME} ${IMAGE_NAME}:${VERSION}"
                 sh "docker tag ${IMAGE_NAME} ${IMAGE_NAME}:latest"
-                echo "Obraz został zbudowany i przetestowany lokalnie."
+                echo "Obraz otagowany jako ${IMAGE_NAME}:${VERSION} i :latest"
             }
         }
 
@@ -29,10 +37,23 @@ pipeline {
             steps {
                 script {
                     sh "docker rm -f kanye-web-container || true"
-                    sh "docker run -d --name kanye-web-container -p 3000:3000 ${IMAGE_NAME}"
+                    sh "docker run -d --name kanye-web-container -p 3000:3000 ${IMAGE_NAME}:${VERSION}"
+                    // smoke test
+                    sh """
+                        sleep 5
+                        curl -f http://localhost:3000 || (echo 'Smoke test FAILED' && docker logs kanye-web-container && exit 1)
+                    """
                 }
-                echo "Aplikacja dostępna pod adresem http://localhost:3000"
+                echo "Smoke test OK — aplikacja dostępna pod http://localhost:3000"
             }
+        }
+    }
+    post {
+        always {
+            script {
+                sh "docker inspect ${IMAGE_NAME}:${VERSION} > docker-inspect-${VERSION}.json || true"
+            }
+            archiveArtifacts artifacts: "docker-inspect-${VERSION}.json", allowEmptyArchive: true
         }
     }
 }
