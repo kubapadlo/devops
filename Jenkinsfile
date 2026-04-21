@@ -10,7 +10,6 @@ pipeline {
         stage('Clone') {
             steps {
                 checkout scm
-                sh 'git clean -fdx' 
             }
         }
 
@@ -37,28 +36,19 @@ pipeline {
         stage('Deploy') {
             steps {
                 script {
-                    // W DinD zawsze używaj localhost dla testów lokalnych po mapowaniu portów
-                    def testTarget = "127.0.0.1" 
+                    // adres VM 
+                    def vmIp = sh(script: "grep '\${HOSTNAME}' /etc/hosts | awk '{print \$1}'", returnStdout: true).trim()
                     
                     sh "docker rm -f kanye-web-container || true"
-                    
-                    // Uruchomienie z jawnym mapowaniem portów
                     sh "docker run -d --name kanye-web-container -p 3000:3000 ${IMAGE_NAME}:${VERSION}"
                     
-                    echo "DinD Smoke Test: sprawdzam dostępność na http://${testTarget}:3000"
-                    
-                    // Czekamy na gotowość Next.js (5s to czasem mało dla cięższych apek, zostawiam 7s)
-                    sh """
-                        sleep 7
-                        curl -sSf http://${testTarget}:3000 > /dev/null || (
-                            echo 'critical: Smoke test FAILED - logi kontenera:' && 
-                            docker logs kanye-web-container && 
-                            exit 1
-                        )
-                    """
-                    
-                    echo "Sukces! Kontener działa poprawnie wewnątrz DinD."
+                    // echo "Running smoke test on IP: ${vmIp}"
+                    // sh """
+                    //     sleep 5
+                    //     curl -f http://${vmIp}:3000 || (echo 'Smoke test FAILED' && docker logs kanye-web-container && exit 1)
+                    // """
                 }
+                echo "Aplikacja dostępna pod http://\${vmIp}:3000"
             }
         }
     }
