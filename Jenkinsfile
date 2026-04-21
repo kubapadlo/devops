@@ -19,36 +19,25 @@ pipeline {
             steps {
                 sh """
                     docker build \
-                    --target builder \
-                    --build-arg GIT_COMMIT=\$(git rev-parse --short HEAD) \
-                    --build-arg BUILD_NUMBER=${BUILD_NUMBER} \
-                    --build-arg BUILD_DATE=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \
-                    -t ${IMAGE_NAME}:builder .
-                """
-            }
-        }
-
-        stage('Test') {
-            steps {
-                sh "docker run --rm ${IMAGE_NAME}:builder pnpm test"
-            }
-        }
-
-        stage('Deploy') {
-            steps {
-                // 1. Budujemy finalny obraz runner z entrypointem
-                sh """
-                    docker build \
                     --build-arg GIT_COMMIT=\$(git rev-parse --short HEAD) \
                     --build-arg BUILD_NUMBER=${BUILD_NUMBER} \
                     --build-arg BUILD_DATE=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \
                     -t ${IMAGE_NAME}:${VERSION} \
                     -t ${IMAGE_NAME}:latest .
                 """
+            }
+        }
 
+        stage('Test') {
+            steps {
+                sh "docker run --rm ${IMAGE_NAME}:${VERSION} pnpm test"
+            }
+        }
+
+        stage('Deploy') {
+            steps {
                 sh "docker rm -f kanye-web-container || true"
                 sh "docker run -d --name kanye-web-container -p 3000:3000 ${IMAGE_NAME}:${VERSION}"
-
             }
         }
 
