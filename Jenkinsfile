@@ -2,8 +2,10 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_NAME = "kanye-counter-local"
-        VERSION    = "1.0.${BUILD_NUMBER}"  // Wbudowana zmienna
+        IMAGE_NAME    = "kanye-counter"
+        REGISTRY_USER = "jpadlo"
+        REGISTRY_IMAGE = "${REGISTRY_USER}/${IMAGE_NAME}"
+        VERSION       = "1.0.${BUILD_NUMBER}"
     }
 
     stages {
@@ -13,45 +15,61 @@ pipeline {
             }
         }
 
-        stage('Build & Test') {
+        stage('Build') {
             steps {
                 sh """
                     docker build \
+                    --target builder \
                     --build-arg GIT_COMMIT=\$(git rev-parse --short HEAD) \
                     --build-arg BUILD_NUMBER=${BUILD_NUMBER} \
                     --build-arg BUILD_DATE=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \
-                    -t ${IMAGE_NAME} .
+                    -t ${IMAGE_NAME}:builder .
                 """
             }
         }
 
-        stage('Publish (Local)') {
+        stage('Test') {
             steps {
-                sh "docker tag ${IMAGE_NAME} ${IMAGE_NAME}:${VERSION}"
-                sh "docker tag ${IMAGE_NAME} ${IMAGE_NAME}:latest"
-                echo "Obraz otagowany jako ${IMAGE_NAME}:${VERSION} i :latest"
+                sh "docker run --rm ${IMAGE_NAME}:builder pnpm test"
             }
         }
 
         stage('Deploy') {
             steps {
-                script {
-                    // adres VM 
-                    def vmIp = sh(script: "grep '\${HOSTNAME}' /etc/hosts | awk '{print \$1}'", returnStdout: true).trim()
-                    
-                    sh "docker rm -f kanye-web-container || true"
-                    sh "docker run -d --name kanye-web-container -p 3000:3000 ${IMAGE_NAME}:${VERSION}"
-                    
-                    // echo "Running smoke test on IP: ${vmIp}"
-                    // sh """
-                    //     sleep 5
-                    //     curl -f http://${vmIp}:3000 || (echo 'Smoke test FAILED' && docker logs kanye-web-container && exit 1)
-                    // """
+                // 1. Budujemy finalny obraz runner z entrypointem
+                sh """
+                    docker build \
+                    --build-arg GIT_COMMIT=\$(git rev-parse --short HEAD) \
+                    --build-arg BUILD_NUMBER=${BUILD_NUMBER} \
+                    --build-arg BUILD_DATE=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+                    -t ${IMAGE_NAME}:${VERSION} \
+                    -t ${IMAGE_NAME}:latest .
+                """
+
+                sh "docker rm -f kanye-web-container || true"
+                sh "docker run -d --name kanye-web-container -p 3000:3000 ${IMAGE_NAME}:${VERSION}"
+
+            }
+        }
+
+        stage('Publish') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-credentials',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    sh "echo ${DOCKER_PASS} | docker login -u ${DOCKER_USER} --password-stdin"
+                    sh "docker tag ${IMAGE_NAME}:${VERSION} ${REGISTRY_IMAGE}:${VERSION}"
+                    sh "docker tag ${IMAGE_NAME}:latest ${REGISTRY_IMAGE}:latest"
+                    sh "docker push ${REGISTRY_IMAGE}:${VERSION}"
+                    sh "docker push ${REGISTRY_IMAGE}:latest"
+                    echo "Opublikowano ${REGISTRY_IMAGE}:${VERSION} i :latest"
                 }
-                echo "Aplikacja dostępna pod http://\${vmIp}:3000"
             }
         }
     }
+
     post {
         always {
             script {
