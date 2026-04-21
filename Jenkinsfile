@@ -10,6 +10,7 @@ pipeline {
         stage('Clone') {
             steps {
                 checkout scm
+                sh 'git clean -fdx' 
             }
         }
 
@@ -36,17 +37,21 @@ pipeline {
         stage('Deploy') {
             steps {
                 script {
+                    // adres VM 
+                    def vmIp = sh(script: "hostname -I | awk '{print \$1}'", returnStdout: true).trim()
+                    
                     sh "docker rm -f kanye-web-container || true"
                     sh "docker run -d --name kanye-web-container -p 3000:3000 ${IMAGE_NAME}:${VERSION}"
-                    // smoke test
-                    //sh """
-                    //    sleep 5
-                    //    curl -f http://localhost:3000 || (echo 'Smoke test FAILED' && docker logs kanye-web-container && exit 1)
-                    //"""
+                    
+                    echo "Running smoke test on IP: ${vmIp}"
+                    sh """
+                        sleep 5
+                        curl -f http://${vmIp}:3000 || (echo 'Smoke test FAILED' && docker logs kanye-web-container && exit 1)
+                    """
                 }
-                echo "aplikacja dostępna pod http://localhost:3000"
+                echo "Aplikacja dostępna pod http://\${vmIp}:3000"
             }
-        }
+}
     }
     post {
         always {
