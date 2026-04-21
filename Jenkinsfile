@@ -30,7 +30,13 @@ pipeline {
 
         stage('Test') {
             steps {
-                sh "docker run --rm ${IMAGE_NAME}:${VERSION} pnpm test"
+                script {
+                    // Wykorzystujemy istniejącą fazę 'builder' z Dockerfile
+                    sh "docker build --target builder -t ${IMAGE_NAME}-test ."
+                    
+                    // Uruchamiamy testy
+                    sh "docker run --rm ${IMAGE_NAME}-test pnpm test"
+                }
             }
         }
 
