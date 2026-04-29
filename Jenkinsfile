@@ -15,6 +15,15 @@ pipeline {
             }
         }
 
+        stage('Test') {
+            steps {
+                script {
+                    sh "docker build --target builder -t ${IMAGE_NAME}-test ."
+                    sh "docker run --rm ${IMAGE_NAME}-test pnpm test"
+                }
+            }
+        }
+
         stage('Build') {
             steps {
                 sh """
@@ -25,25 +34,6 @@ pipeline {
                     -t ${IMAGE_NAME}:${VERSION} \
                     -t ${IMAGE_NAME}:latest .
                 """
-            }
-        }
-
-        stage('Test') {
-            steps {
-                script {
-                    // Wykorzystujemy istniejącą fazę 'builder' z Dockerfile
-                    sh "docker build --target builder -t ${IMAGE_NAME}-test ."
-                    
-                    // Uruchamiamy testy
-                    sh "docker run --rm ${IMAGE_NAME}-test pnpm test"
-                }
-            }
-        }
-
-        stage('Deploy') {
-            steps {
-                sh "docker rm -f kanye-web-container || true"
-                sh "docker run -d --name kanye-web-container -p 3000:3000 ${IMAGE_NAME}:${VERSION}"
             }
         }
 
@@ -59,8 +49,20 @@ pipeline {
                     sh "docker tag ${IMAGE_NAME}:latest ${REGISTRY_IMAGE}:latest"
                     sh "docker push ${REGISTRY_IMAGE}:${VERSION}"
                     sh "docker push ${REGISTRY_IMAGE}:latest"
-                    echo "Opublikowano ${REGISTRY_IMAGE}:${VERSION} i :latest"
                 }
+            }
+            post {
+                always {
+                    sh "docker logout || true"
+                }
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                sh "docker pull ${REGISTRY_IMAGE}:${VERSION}"
+                sh "docker rm -f kanye-web-container || true"
+                sh "docker run -d --name kanye-web-container -p 3000:3000 ${REGISTRY_IMAGE}:${VERSION}"
             }
         }
     }
@@ -69,8 +71,13 @@ pipeline {
         always {
             script {
                 sh "docker inspect ${IMAGE_NAME}:${VERSION} > docker-inspect-${VERSION}.json || true"
+                archiveArtifacts artifacts: "docker-inspect-${VERSION}.json", allowEmptyArchive: true
+                
+                sh "docker rmi ${IMAGE_NAME}:${VERSION} || true"
+                sh "docker rmi ${IMAGE_NAME}:latest || true"
+                sh "docker rmi ${REGISTRY_IMAGE}:${VERSION} || true"
+                sh "docker rmi ${IMAGE_NAME}-test || true"
             }
-            archiveArtifacts artifacts: "docker-inspect-${VERSION}.json", allowEmptyArchive: true
         }
     }
 }

@@ -1,0 +1,43 @@
+# 1. Zależności i pliki tymczasowe menedżerów pakietów
+# To absolutnie najważniejsze! Kontener sam pobierze zależności.
+node_modules
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+pnpm-debug.log
+
+# 2. Buildy Next.js i foldery wyjściowe
+# Chcemy, aby Docker zbudował aplikację od zera, a nie kopiował Twój lokalny build.
+.next
+out
+build
+
+# 3. Pliki środowiskowe z lokalnymi sekretami
+# Obraz Dockera nie powinien zawierać lokalnych haseł i kluczy API.
+# (Jeśli potrzebujesz zmiennych na produkcji, przekażesz je podczas 'docker run')
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+
+# 4. Git i pliki systemowe
+.git
+.gitignore
+.DS_Store
+Thumbs.db
+
+# 5. Konfiguracja CI / CD i sam Docker
+# Kontener nie potrzebuje instrukcji, jak samego siebie zbudować.
+Dockerfile
+.dockerignore
+Jenkinsfile
+docker-compose.yml
+
+# 6. Testy i raporty (opcjonalnie)
+coverage
+.nyc_output
+cypress/videos
+cypress/screenshots
+playwright-report/
+test-results/
