@@ -55,6 +55,10 @@ resource "proxmox_virtual_environment_vm" "moja_vm" {
 
 # 3. Skrypt naprawczy KVM i startujący maszynę
 resource "null_resource" "fix_kvm_and_start" {
+  triggers = {
+    vm_id = proxmox_virtual_environment_vm.moja_vm.id
+  }
+
   depends_on = [proxmox_virtual_environment_vm.moja_vm]
 
   connection {
