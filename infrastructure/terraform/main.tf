@@ -1,20 +1,9 @@
-data "proxmox_virtual_environment_vms" "template" {
-  node_name = "pve"
-  tags      = []
-
-  filter {
-    name   = "name"
-    values = ["ubuntu-template"]
-  }
-}
-
 resource "proxmox_virtual_environment_vm" "moja_vm" {
   name      = "nextjs-server"
   node_name = "pve"
-  started   = true
   
-  # KLUCZOWA POPRAWKA: Wyłączenie KVM na poziomie konfiguracji
-  kvm       = false 
+  # WAŻNE: Ustawiamy na false, aby Terraform nie próbował sam odpalać maszyny
+  started   = false 
 
   clone {
     vm_id = data.proxmox_virtual_environment_vms.template.vms[0].vm_id
@@ -53,6 +42,29 @@ resource "proxmox_virtual_environment_vm" "moja_vm" {
   }
 }
 
+# Ten zasób naprawi konfigurację i odpali maszynę
+resource "null_resource" "fix_kvm_and_start" {
+  depends_on = [proxmox_virtual_environment_vm.moja_vm]
+
+  connection {
+    type     = "ssh"
+    host     = "192.168.56.101"
+    user     = "root"
+    password = var.root_password
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "echo 'Wyłączam KVM dla VM ${proxmox_virtual_environment_vm.moja_vm.vm_id}...'",
+      "qm set ${proxmox_virtual_environment_vm.moja_vm.vm_id} --kvm 0",
+      "echo 'Startuję maszynę...'",
+      "qm start ${proxmox_virtual_environment_vm.moja_vm.vm_id}"
+    ]
+  }
+}
+
 output "vm_ip" {
+  # Ponieważ maszyna startuje "poza" głównym zasobem, Terraform może nie złapać IP od razu.
+  # Ale zostawiamy to dla Jenkinsa.
   value = flatten(proxmox_virtual_environment_vm.moja_vm.ipv4_addresses)[0]
 }

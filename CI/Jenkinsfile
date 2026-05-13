@@ -1,20 +1,16 @@
 pipeline {
     agent any
 
-    tools {
-        terraform 'Terraform-latest' 
-    }
-
     parameters {
         booleanParam(
             name: 'PROVISION_INFRA',
             defaultValue: false,
-            description: 'Czy uruchomić Terraform (provisioning VM na Proxmox)?'
+            description: 'Czy uruchomić Terraform (provisioning VM)?'
         )
         booleanParam(
             name: 'PUSH_IMAGE',
             defaultValue: true,
-            description: 'Czy wypchnąć zbudowany obraz do Docker Hub?'
+            description: 'Czy wypchnąć obraz do Docker Hub?'
         )
         booleanParam(
             name: 'RUN_DEPLOY',
@@ -42,11 +38,7 @@ pipeline {
         stage('Test') {
             steps {
                 script {
-                    sh """
-                        docker build \
-                            --target builder \
-                            -t ${IMAGE_NAME}-test .
-                    """
+                    sh "docker build --target builder -t ${IMAGE_NAME}-test ."
                     sh "docker run --rm ${IMAGE_NAME}-test pnpm test"
                 }
             }
@@ -67,13 +59,14 @@ pipeline {
                         -t ${IMAGE_NAME}:${VERSION} \
                         -t ${IMAGE_NAME}:latest .
                 """
+                // Tagowanie dla rejestru (przygotowanie)
+                sh "docker tag ${IMAGE_NAME}:${VERSION} ${REGISTRY_IMAGE}:${VERSION}"
+                sh "docker tag ${IMAGE_NAME}:latest ${REGISTRY_IMAGE}:latest"
             }
         }
 
         stage('Publish') {
-            when {
-                expression { return params.PUSH_IMAGE }
-            }
+            when { expression { return params.PUSH_IMAGE } }
             steps {
                 withCredentials([usernamePassword(
                     credentialsId: 'dockerhub-credentials',
@@ -81,8 +74,6 @@ pipeline {
                     passwordVariable: 'DOCKER_PASS'
                 )]) {
                     sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
-                    sh "docker tag ${IMAGE_NAME}:${VERSION} ${REGISTRY_IMAGE}:${VERSION}"
-                    sh "docker tag ${IMAGE_NAME}:latest     ${REGISTRY_IMAGE}:latest"
                     sh "docker push ${REGISTRY_IMAGE}:${VERSION}"
                     sh "docker push ${REGISTRY_IMAGE}:latest"
                 }
@@ -95,9 +86,7 @@ pipeline {
         }
 
         stage('Terraform') {
-            when {
-                expression { return params.PROVISION_INFRA }
-            }
+            when { expression { return params.PROVISION_INFRA } }
             steps {
                 withCredentials([
                     string(credentialsId: 'proxmox-api-token',     variable: 'PROXMOX_TOKEN'),
@@ -106,16 +95,26 @@ pipeline {
                 ]) {
                     dir("${TERRAFORM_DIR}") {
                         sh "terraform init"
-                        sh """
-                            terraform apply -auto-approve \
-                                -var="api_token=${PROXMOX_TOKEN}" \
-                                -var="root_password=${PROXMOX_PASS}"
-                        """
+                        // Apply uruchomi VM z started=false, a potem null_resource wyłączy KVM i odpali qm start
+                        sh "terraform apply -auto-approve -var='api_token=${PROXMOX_TOKEN}' -var='root_password=${PROXMOX_PASS}'"
                         
                         script {
+                            echo "Czekam 45 sekund na boot systemu i start QEMU Guest Agenta..."
+                            sleep 45
+                            
+                            // Odświeżenie stanu, aby pobrać IP przypisane przez DHCP
+                            sh "terraform refresh -var='api_token=${PROXMOX_TOKEN}' -var='root_password=${PROXMOX_PASS}'"
+                            
                             def vmIp = sh(script: "terraform output -raw vm_ip", returnStdout: true).trim()
-                            echo "VM IP z Terraform: ${vmIp}"
+                            
+                            if (!vmIp || vmIp.contains("Warning") || vmIp == "") {
+                                error "Nie udało się pobrać IP maszyny. Sprawdź czy QEMU Guest Agent działa na VM."
+                            }
 
+                            echo "Pobrano IP: ${vmIp}"
+                            writeFile(file: "vm_ip.txt", text: vmIp)
+
+                            // Generowanie inventory dla Ansible
                             writeFile(
                                 file: "../../${ANSIBLE_DIR}/inventory/hosts.ini",
                                 text: """[Endpoints]
@@ -125,7 +124,6 @@ ${vmIp} ansible_user=ubuntu ansible_ssh_private_key_file=${SSH_KEY}
 ansible_ssh_common_args='-o StrictHostKeyChecking=no'
 """
                             )
-                            writeFile(file: "vm_ip.txt", text: vmIp)
                         }
                     }
                 }
@@ -133,42 +131,47 @@ ansible_ssh_common_args='-o StrictHostKeyChecking=no'
         }
 
         stage('Deploy') {
-            when {
-                expression { return params.RUN_DEPLOY }
-            }
+            when { expression { return params.RUN_DEPLOY } }
             steps {
                 withCredentials([
                     sshUserPrivateKey(credentialsId: 'ansible-ssh-key', keyFileVariable: 'SSH_KEY')
                 ]) {
                     script {
-                        if (!params.PROVISION_INFRA) {
-                            def savedIp = sh(
-                                script: """
-                                    terraform -chdir=${TERRAFORM_DIR} output -raw vm_ip 2>/dev/null || \
-                                    cat vm_ip.txt 2>/dev/null || \
-                                    echo ''
-                                """,
-                                returnStdout: true
-                            ).trim()
+                        def targetIp = ""
+                        
+                        if (params.PROVISION_INFRA) {
+                            targetIp = readFile("${TERRAFORM_DIR}/vm_ip.txt").trim()
+                        } else {
+                            // Próba odczytania IP z terraform output jeśli nie robiliśmy provisioningu teraz
+                            targetIp = sh(script: "terraform -chdir=${TERRAFORM_DIR} output -raw vm_ip 2>/dev/null || cat ${TERRAFORM_DIR}/vm_ip.txt 2>/dev/null || echo ''", returnStdout: true).trim()
+                        }
 
-                            if (!savedIp) {
-                                error("Brak IP maszyny. Uruchom pipeline z PROVISION_INFRA=true.")
-                            }
+                        if (!targetIp || targetIp == "") {
+                            error "Brak adresu IP docelowego serwera!"
+                        }
 
-                            writeFile(
-                                file: "${ANSIBLE_DIR}/inventory/hosts.ini",
-                                text: """[Endpoints]
-${savedIp} ansible_user=ubuntu ansible_ssh_private_key_file=${SSH_KEY}
+                        // Tworzenie inventory na wypadek gdyby nie istniało (np. przy pominiętym etapie Terraform)
+                        writeFile(
+                            file: "${ANSIBLE_DIR}/inventory/hosts.ini",
+                            text: """[Endpoints]
+${targetIp} ansible_user=ubuntu ansible_ssh_private_key_file=${SSH_KEY}
 
 [Endpoints:vars]
 ansible_ssh_common_args='-o StrictHostKeyChecking=no'
 """
-                            )
-                        }
+                        )
 
+                        echo "Czekam na gotowość SSH na ${targetIp}..."
                         sh """
-                            echo "Czekam na SSH..."
-                            timeout 120 bash -c 'until ansible Endpoints -i ${ANSIBLE_DIR}/inventory/hosts.ini --private-key=${SSH_KEY} -m ping 2>/dev/null; do sleep 5; done'
+                            timeout 120 bash -c '
+                                until ansible Endpoints \
+                                    -i ${ANSIBLE_DIR}/inventory/hosts.ini \
+                                    --private-key=${SSH_KEY} \
+                                    -m ping 2>/dev/null; do
+                                    echo "SSH nieodpowiada, ponawiam za 5s..."
+                                    sleep 5
+                                done
+                            '
                         """
 
                         sh """
@@ -186,9 +189,12 @@ ansible_ssh_common_args='-o StrictHostKeyChecking=no'
     post {
         always {
             script {
-                sh "docker inspect ${IMAGE_NAME}:${VERSION} > docker-inspect-${VERSION}.json || true"
-                archiveArtifacts artifacts: "docker-inspect-${VERSION}.json, vm_ip.txt", allowEmptyArchive: true
-                sh "docker rmi ${IMAGE_NAME}:${VERSION} ${IMAGE_NAME}:latest ${REGISTRY_IMAGE}:${VERSION} || true"
+                // Archiwizacja logów i IP
+                archiveArtifacts artifacts: "infrastructure/terraform/vm_ip.txt, *.json", allowEmptyArchive: true
+
+                // Sprzątanie obrazów lokalnych
+                sh "docker rmi ${IMAGE_NAME}:${VERSION} ${IMAGE_NAME}:latest || true"
+                sh "docker rmi ${REGISTRY_IMAGE}:${VERSION} ${REGISTRY_IMAGE}:latest || true"
             }
         }
     }
