@@ -19,13 +19,11 @@ pipeline {
         REGISTRY_USER  = "jpadlo"
         REGISTRY_IMAGE = "${REGISTRY_USER}/${IMAGE_NAME}"
         VERSION        = "1.0.${BUILD_NUMBER}"
-
         TERRAFORM_DIR  = "infrastructure/terraform"
         ANSIBLE_DIR    = "infrastructure/ansible"
     }
 
     stages {
-
         stage('Clone') {
             steps {
                 checkout scm
@@ -84,17 +82,16 @@ pipeline {
             }
         }
 
-        // ──────────────────────────────────────────
-        // TERRAFORM — zapisuje IP do zmiennej środowiskowej
-        // ──────────────────────────────────────────
         stage('Terraform') {
             when {
                 expression { return params.PROVISION_INFRA }
             }
             steps {
+                // Moved SSH_KEY here so it can be written to the hosts.ini file
                 withCredentials([
                     string(credentialsId: 'proxmox-api-token',     variable: 'PROXMOX_TOKEN'),
-                    string(credentialsId: 'proxmox-root-password',  variable: 'PROXMOX_PASS')
+                    string(credentialsId: 'proxmox-root-password',  variable: 'PROXMOX_PASS'),
+                    sshUserPrivateKey(credentialsId: 'ansible-ssh-key', keyFileVariable: 'SSH_KEY')
                 ]) {
                     dir("${TERRAFORM_DIR}") {
                         sh "terraform init"
@@ -103,11 +100,8 @@ pipeline {
                                 -var="api_token=${PROXMOX_TOKEN}" \
                                 -var="root_password=${PROXMOX_PASS}"
                         """
-                    }
-                }
-
+                        
                         script {
-                            // Pobierz IP z terraform output i zapisz do pliku
                             def vmIp = sh(
                                 script: "terraform output -raw vm_ip",
                                 returnStdout: true
@@ -115,11 +109,9 @@ pipeline {
 
                             echo "VM IP z Terraform: ${vmIp}"
 
-                            // Wygeneruj plik inventory dla Ansible
                             writeFile(
                                 file: "../../${ANSIBLE_DIR}/inventory/hosts.ini",
-                                text: """\
-[Endpoints]
+                                text: """[Endpoints]
 ${vmIp} ansible_user=ubuntu ansible_ssh_private_key_file=${SSH_KEY}
 
 [Endpoints:vars]
@@ -127,21 +119,13 @@ ansible_ssh_common_args='-o StrictHostKeyChecking=no'
 """
                             )
 
-                            // Zapisz IP jako artifact do reużycia w Deploy
-                            // gdy Terraform nie jest uruchamiany ponownie
-                            writeFile(
-                                file: "vm_ip.txt",
-                                text: vmIp
-                            )
+                            writeFile(file: "vm_ip.txt", text: vmIp)
                         }
                     }
                 }
             }
         }
 
-        // ──────────────────────────────────────────
-        // ANSIBLE — używa IP z Terraform lub z pliku
-        // ──────────────────────────────────────────
         stage('Deploy') {
             when {
                 expression { return params.RUN_DEPLOY }
@@ -154,8 +138,6 @@ ansible_ssh_common_args='-o StrictHostKeyChecking=no'
                     )
                 ]) {
                     script {
-                        // Jeśli Terraform nie był uruchomiony w tym buildzie,
-                        // spróbuj wczytać IP z poprzedniego runu
                         if (!params.PROVISION_INFRA) {
                             def savedIp = sh(
                                 script: """
@@ -174,8 +156,7 @@ ansible_ssh_common_args='-o StrictHostKeyChecking=no'
 
                             writeFile(
                                 file: "${ANSIBLE_DIR}/inventory/hosts.ini",
-                                text: """\
-[Endpoints]
+                                text: """[Endpoints]
 ${savedIp} ansible_user=ubuntu ansible_ssh_private_key_file=${SSH_KEY}
 
 [Endpoints:vars]
@@ -184,7 +165,6 @@ ansible_ssh_common_args='-o StrictHostKeyChecking=no'
                             )
                         }
 
-                        // Poczekaj aż VM będzie dostępna przez SSH
                         sh """
                             echo "Czekam na SSH na maszynie..."
                             timeout 120 bash -c '
