@@ -76,7 +76,7 @@ resource "null_resource" "fix_kvm_and_start" {
 
 # 4. Outputy dla Jenkinsa
 output "vm_ip" {
-  value = flatten(proxmox_virtual_environment_vm.moja_vm.ipv4_addresses)[0]
+  value = try(flatten(proxmox_virtual_environment_vm.moja_vm.ipv4_addresses)[0], "")
 }
 
 output "vm_id" {

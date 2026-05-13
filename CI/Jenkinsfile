@@ -101,8 +101,8 @@ pipeline {
                         sh "terraform apply -auto-approve -var='api_token=${PROXMOX_TOKEN}' -var='root_password=${PROXMOX_PASS}'"
                         
                         script {
-                            echo "Czekam 45 sekund na boot systemu i start QEMU Guest Agenta..."
-                            sleep 45
+                            echo "Czekam 90 sekund na boot systemu i start QEMU Guest Agenta..."
+                            sleep 90
                             
                             sh "terraform refresh -var='api_token=${PROXMOX_TOKEN}' -var='root_password=${PROXMOX_PASS}'"
                             
