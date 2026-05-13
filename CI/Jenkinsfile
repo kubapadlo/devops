@@ -154,4 +154,38 @@ ansible_ssh_common_args='-o StrictHostKeyChecking=no'
                             writeFile(
                                 file: "${ANSIBLE_DIR}/inventory/hosts.ini",
                                 text: """[Endpoints]
-${savedIp} ansible_u
+${savedIp} ansible_user=ubuntu ansible_ssh_private_key_file=${SSH_KEY}
+
+[Endpoints:vars]
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+"""
+                            )
+                        }
+
+                        sh """
+                            echo "Czekam na SSH..."
+                            timeout 120 bash -c 'until ansible Endpoints -i ${ANSIBLE_DIR}/inventory/hosts.ini --private-key=${SSH_KEY} -m ping 2>/dev/null; do sleep 5; done'
+                        """
+
+                        sh """
+                            ansible-playbook ${ANSIBLE_DIR}/playbook.yml \
+                                --private-key=${SSH_KEY} \
+                                -i ${ANSIBLE_DIR}/inventory/hosts.ini \
+                                --extra-vars "image_name=${REGISTRY_IMAGE} image_tag=${VERSION}"
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                sh "docker inspect ${IMAGE_NAME}:${VERSION} > docker-inspect-${VERSION}.json || true"
+                archiveArtifacts artifacts: "docker-inspect-${VERSION}.json, vm_ip.txt", allowEmptyArchive: true
+                sh "docker rmi ${IMAGE_NAME}:${VERSION} ${IMAGE_NAME}:latest ${REGISTRY_IMAGE}:${VERSION} || true"
+            }
+        }
+    }
+}
