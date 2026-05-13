@@ -44,7 +44,7 @@ pipeline {
                     usernameVariable: 'DOCKER_USER',
                     passwordVariable: 'DOCKER_PASS'
                 )]) {
-                    sh "echo ${DOCKER_PASS} | docker login -u ${DOCKER_USER} --password-stdin"
+                    sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
                     sh "docker tag ${IMAGE_NAME}:${VERSION} ${REGISTRY_IMAGE}:${VERSION}"
                     sh "docker tag ${IMAGE_NAME}:latest ${REGISTRY_IMAGE}:latest"
                     sh "docker push ${REGISTRY_IMAGE}:${VERSION}"
