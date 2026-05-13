@@ -1,11 +1,22 @@
+# 1. Definicja danych - TEGO BRAKOWAŁO W TWOIM OSTATNIM BUILDZIE
+data "proxmox_virtual_environment_vms" "template" {
+  node_name = "pve"
+  filter {
+    name   = "name"
+    values = ["ubuntu-template"]
+  }
+}
+
+# 2. Definicja Maszyny Wirtualnej
 resource "proxmox_virtual_environment_vm" "moja_vm" {
   name      = "nextjs-server"
   node_name = "pve"
   
-  # WAŻNE: Ustawiamy na false, aby Terraform nie próbował sam odpalać maszyny
+  # WAŻNE: Musi być false, bo Proxmox nie odpali jej z domyślnym KVM
   started   = false 
 
   clone {
+    # Referencja do bloku data powyżej
     vm_id = data.proxmox_virtual_environment_vms.template.vms[0].vm_id
     full  = false
   }
@@ -42,7 +53,7 @@ resource "proxmox_virtual_environment_vm" "moja_vm" {
   }
 }
 
-# Ten zasób naprawi konfigurację i odpali maszynę
+# 3. Skrypt naprawczy KVM i startujący maszynę
 resource "null_resource" "fix_kvm_and_start" {
   depends_on = [proxmox_virtual_environment_vm.moja_vm]
 
@@ -63,8 +74,11 @@ resource "null_resource" "fix_kvm_and_start" {
   }
 }
 
+# 4. Outputy dla Jenkinsa
 output "vm_ip" {
-  # Ponieważ maszyna startuje "poza" głównym zasobem, Terraform może nie złapać IP od razu.
-  # Ale zostawiamy to dla Jenkinsa.
   value = flatten(proxmox_virtual_environment_vm.moja_vm.ipv4_addresses)[0]
+}
+
+output "vm_id" {
+  value = proxmox_virtual_environment_vm.moja_vm.vm_id
 }
