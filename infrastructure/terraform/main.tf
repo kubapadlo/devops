@@ -33,7 +33,7 @@ resource "proxmox_virtual_environment_vm" "moja_vm" {
   }
 
   agent {
-    enabled = false
+    enabled = true
   }
 
   initialization {
@@ -47,10 +47,6 @@ resource "proxmox_virtual_environment_vm" "moja_vm" {
       username = "ubuntu"
       keys     = ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL/eOJZJzV4dgnK+mLmWUbUZN9l6ar8oxr1P9W1tBwEI jpadlo@student.agh.edu.pl"]
     }
-  }
-
-  agent {
-    enabled = true
   }
 }
 
