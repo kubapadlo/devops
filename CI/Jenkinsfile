@@ -1,6 +1,10 @@
 pipeline {
     agent any
 
+    tools {
+        terraform 'Terraform-latest' 
+    }
+
     parameters {
         booleanParam(
             name: 'PROVISION_INFRA',
