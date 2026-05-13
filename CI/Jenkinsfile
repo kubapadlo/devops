@@ -8,6 +8,11 @@ pipeline {
             description: 'Czy uruchomić Terraform (provisioning VM na Proxmox)?'
         )
         booleanParam(
+            name: 'PUSH_IMAGE',
+            defaultValue: true,
+            description: 'Czy wypchnąć zbudowany obraz do Docker Hub?'
+        )
+        booleanParam(
             name: 'RUN_DEPLOY',
             defaultValue: true,
             description: 'Czy uruchomić deploy przez Ansible?'
@@ -62,6 +67,9 @@ pipeline {
         }
 
         stage('Publish') {
+            when {
+                expression { return params.PUSH_IMAGE }
+            }
             steps {
                 withCredentials([usernamePassword(
                     credentialsId: 'dockerhub-credentials',
@@ -87,7 +95,6 @@ pipeline {
                 expression { return params.PROVISION_INFRA }
             }
             steps {
-                // Moved SSH_KEY here so it can be written to the hosts.ini file
                 withCredentials([
                     string(credentialsId: 'proxmox-api-token',     variable: 'PROXMOX_TOKEN'),
                     string(credentialsId: 'proxmox-root-password',  variable: 'PROXMOX_PASS'),
@@ -102,11 +109,7 @@ pipeline {
                         """
                         
                         script {
-                            def vmIp = sh(
-                                script: "terraform output -raw vm_ip",
-                                returnStdout: true
-                            ).trim()
-
+                            def vmIp = sh(script: "terraform output -raw vm_ip", returnStdout: true).trim()
                             echo "VM IP z Terraform: ${vmIp}"
 
                             writeFile(
@@ -118,7 +121,6 @@ ${vmIp} ansible_user=ubuntu ansible_ssh_private_key_file=${SSH_KEY}
 ansible_ssh_common_args='-o StrictHostKeyChecking=no'
 """
                             )
-
                             writeFile(file: "vm_ip.txt", text: vmIp)
                         }
                     }
@@ -132,10 +134,7 @@ ansible_ssh_common_args='-o StrictHostKeyChecking=no'
             }
             steps {
                 withCredentials([
-                    sshUserPrivateKey(
-                        credentialsId: 'ansible-ssh-key',
-                        keyFileVariable: 'SSH_KEY'
-                    )
+                    sshUserPrivateKey(credentialsId: 'ansible-ssh-key', keyFileVariable: 'SSH_KEY')
                 ]) {
                     script {
                         if (!params.PROVISION_INFRA) {
@@ -152,54 +151,7 @@ ansible_ssh_common_args='-o StrictHostKeyChecking=no'
                                 error("Brak IP maszyny. Uruchom pipeline z PROVISION_INFRA=true.")
                             }
 
-                            echo "Używam zapisanego IP: ${savedIp}"
-
                             writeFile(
                                 file: "${ANSIBLE_DIR}/inventory/hosts.ini",
                                 text: """[Endpoints]
-${savedIp} ansible_user=ubuntu ansible_ssh_private_key_file=${SSH_KEY}
-
-[Endpoints:vars]
-ansible_ssh_common_args='-o StrictHostKeyChecking=no'
-"""
-                            )
-                        }
-
-                        sh """
-                            echo "Czekam na SSH na maszynie..."
-                            timeout 120 bash -c '
-                                until ansible Endpoints \
-                                    -i ${ANSIBLE_DIR}/inventory/hosts.ini \
-                                    --private-key=${SSH_KEY} \
-                                    -m ping 2>/dev/null; do
-                                    sleep 5
-                                done
-                            '
-                        """
-
-                        sh """
-                            ansible-playbook ${ANSIBLE_DIR}/playbook.yml \
-                                --private-key=${SSH_KEY} \
-                                -i ${ANSIBLE_DIR}/inventory/hosts.ini \
-                                --extra-vars "image_name=${REGISTRY_IMAGE} image_tag=${VERSION}"
-                        """
-                    }
-                }
-            }
-        }
-    }
-
-    post {
-        always {
-            script {
-                sh "docker inspect ${IMAGE_NAME}:${VERSION} > docker-inspect-${VERSION}.json || true"
-                archiveArtifacts artifacts: "docker-inspect-${VERSION}.json, vm_ip.txt",
-                                 allowEmptyArchive: true
-
-                sh "docker rmi ${IMAGE_NAME}:${VERSION}     || true"
-                sh "docker rmi ${IMAGE_NAME}:latest         || true"
-                sh "docker rmi ${REGISTRY_IMAGE}:${VERSION} || true"
-            }
-        }
-    }
-}
+${savedIp} ansible_u
