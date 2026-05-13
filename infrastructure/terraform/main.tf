@@ -12,6 +12,9 @@ resource "proxmox_virtual_environment_vm" "moja_vm" {
   name      = "nextjs-server"
   node_name = "pve"
   started   = true
+  
+  # KLUCZOWA POPRAWKA: Wyłączenie KVM na poziomie konfiguracji
+  kvm       = false 
 
   clone {
     vm_id = data.proxmox_virtual_environment_vms.template.vms[0].vm_id
@@ -50,25 +53,6 @@ resource "proxmox_virtual_environment_vm" "moja_vm" {
   }
 }
 
-resource "null_resource" "disable_kvm" {
-  depends_on = [proxmox_virtual_environment_vm.moja_vm]
-
-  connection {
-    type     = "ssh"
-    host     = "192.168.56.101"
-    user     = "root"
-    password = "toortoor"
-  }
-
-  provisioner "remote-exec" {
-    inline = [
-      "qm stop 101 || true",
-      "qm set 101 --kvm 0",
-      "qm start 101"
-    ]
-  }
-}
-
 output "vm_ip" {
-  value = proxmox_virtual_environment_vm.moja_vm.ipv4_addresses[1][0]
+  value = flatten(proxmox_virtual_environment_vm.moja_vm.ipv4_addresses)[0]
 }
