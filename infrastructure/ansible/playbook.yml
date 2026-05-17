@@ -10,176 +10,35 @@
     image_tag: "latest"
     app_port: 3000
     host_port: 3000
-    app_user: "deploy"
-    docker_data_dir: "/opt/kanye-counter"
-    min_disk_gb: 2
-    min_memory_mb: 512
-
-  pre_tasks:
-
-    # ── SANITY CHECKS ────────────────────────────────────────────────
-
-    - name: "[check] System operacyjny"
-      ansible.builtin.assert:
-        that:
-          - ansible_os_family == "Debian"
-        fail_msg: "Playbook wspiera tylko Debian/Ubuntu. Wykryto: {{ ansible_os_family }}"
-        success_msg: "System OK: {{ ansible_distribution }} {{ ansible_distribution_version }}"
-
-    - name: "[check] Wolna pamięć RAM"
-      ansible.builtin.assert:
-        that:
-          - ansible_memfree_mb >= min_memory_mb
-        fail_msg: >
-          Za mało wolnej pamięci RAM.
-          Wymagane: {{ min_memory_mb }} MB,
-          dostępne: {{ ansible_memfree_mb }} MB
-        success_msg: "RAM OK: {{ ansible_memfree_mb }} MB wolne"
-
-    - name: "[check] Wolne miejsce na dysku"
-      ansible.builtin.shell: |
-        df --output=avail -BG / | tail -1 | tr -d 'G '
-      register: disk_free_gb
-      changed_when: false
-
-    - name: "[check] Asercja miejsca na dysku"
-      ansible.builtin.assert:
-        that:
-          - disk_free_gb.stdout | int >= min_disk_gb
-        fail_msg: >
-          Za mało miejsca na dysku.
-          Wymagane: {{ min_disk_gb }} GB,
-          dostępne: {{ disk_free_gb.stdout }} GB
-        success_msg: "Dysk OK: {{ disk_free_gb.stdout }} GB wolne"
-
-    - name: "[check] Wyświetl podsumowanie hosta"
-      ansible.builtin.debug:
-        msg:
-          - "Host:        {{ inventory_hostname }}"
-          - "System:      {{ ansible_distribution }} {{ ansible_distribution_version }}"
-          - "Kernel:      {{ ansible_kernel }}"
-          - "Arch:        {{ ansible_architecture }}"
-          - "RAM wolne:   {{ ansible_memfree_mb }} MB"
-          - "Dysk wolny:  {{ disk_free_gb.stdout }} GB"
 
   tasks:
 
-    # ── UŻYTKOWNIK DEPLOY ─────────────────────────────────────────────
-
-    - name: "[user] Utwórz dedykowanego użytkownika deploy"
-      ansible.builtin.user:
-        name: "{{ app_user }}"
-        shell: /bin/bash
-        groups: docker
-        append: yes
-        create_home: yes
-        system: no
-        comment: "Użytkownik do deploymentu aplikacji"
-
-    - name: "[user] Utwórz katalog roboczy aplikacji"
-      ansible.builtin.file:
-        path: "{{ docker_data_dir }}"
-        state: directory
-        owner: "{{ app_user }}"
-        group: docker
-        mode: "0750"
-
     # ── DOCKER ───────────────────────────────────────────────────────
 
-    - name: "[docker] Zainstaluj wymagane pakiety systemowe"
+    - name: Zainstaluj Docker i zależności
       ansible.builtin.apt:
         name:
-          - apt-transport-https
-          - ca-certificates
-          - curl
-          - gnupg
-          - lsb-release
-          - python3-docker
-        state: present
-        update_cache: yes
-        cache_valid_time: 3600
-
-    - name: "[docker] Sprawdź czy Docker jest już zainstalowany"
-      ansible.builtin.command: docker --version
-      register: docker_installed
-      changed_when: false
-      failed_when: false
-
-    - name: Instalacja Dockera z repozytoriów systemu
-      ansible.builtin.apt:
-        name: 
           - docker.io
           - python3-docker
         state: present
         update_cache: yes
 
-    - name: "[docker] Upewnij się że Docker działa i startuje przy restarcie"
+    - name: Uruchom i włącz Docker przy starcie
       ansible.builtin.systemd:
         name: docker
         state: started
         enabled: yes
-        daemon_reload: yes
-
-    - name: "[docker] Skonfiguruj Docker daemon (logi, zasoby)"
-      ansible.builtin.copy:
-        dest: /etc/docker/daemon.json
-        content: |
-          {
-            "log-driver": "json-file",
-            "log-opts": {
-              "max-size": "10m",
-              "max-file": "3"
-            },
-            "live-restore": true
-          }
-        owner: root
-        group: root
-        mode: "0644"
-      notify: Restart Docker
-
-    - name: "[docker] Zweryfikuj że Docker odpowiada"
-      ansible.builtin.command: docker info
-      register: docker_info
-      changed_when: false
-      failed_when: docker_info.rc != 0
 
     # ── DEPLOY KONTENERA ─────────────────────────────────────────────
 
-    - name: "[deploy] Pobierz najnowszy obraz {{ image_name }}:{{ image_tag }}"
+    - name: Pobierz najnowszy obraz
       community.docker.docker_image:
         name: "{{ image_name }}"
         tag: "{{ image_tag }}"
         source: pull
         force_source: yes
-      register: image_pull
 
-    - name: "[deploy] Zapamiętaj ID pobranego obrazu"
-      ansible.builtin.set_fact:
-        new_image_id: "{{ image_pull.image.Id }}"
-
-    - name: "[deploy] Sprawdź czy kontener już istnieje"
-      community.docker.docker_container_info:
-        name: "{{ container_name }}"
-      register: container_info
-
-    - name: "[deploy] Zapamiętaj ID obrazu działającego kontenera"
-      ansible.builtin.set_fact:
-        running_image_id: >-
-          {{
-            container_info.container.Image
-            if container_info.exists
-            else ''
-          }}
-
-    - name: "[deploy] Zatrzymaj stary kontener (jeśli obraz się zmienił)"
-      community.docker.docker_container:
-        name: "{{ container_name }}"
-        state: stopped
-      when:
-        - container_info.exists
-        - running_image_id != new_image_id
-
-    - name: "[deploy] Uruchom kontener"
+    - name: Uruchom kontener
       community.docker.docker_container:
         name: "{{ container_name }}"
         image: "{{ image_name }}:{{ image_tag }}"
@@ -189,110 +48,23 @@
           - "{{ host_port }}:{{ app_port }}"
         env:
           NODE_ENV: "production"
-        healthcheck:
-          test: ["CMD", "wget", "-qO-", "http://localhost:{{ app_port }}/"]
-          interval: 30s
-          timeout: 10s
-          retries: 3
-          start_period: 20s
-        log_driver: json-file
-        log_options:
-          max-size: "10m"
-          max-file: "3"
-      register: container_result
 
     # ── WERYFIKACJA ──────────────────────────────────────────────────
 
-    - name: "[verify] Poczekaj na start aplikacji"
+    - name: Poczekaj aż port będzie dostępny
       ansible.builtin.wait_for:
         host: localhost
         port: "{{ host_port }}"
         delay: 5
         timeout: 60
-        state: started
-      register: port_check
 
-    - name: "[verify] HTTP GET na aplikację"
+    - name: Sprawdź HTTP
       ansible.builtin.uri:
         url: "http://localhost:{{ host_port }}"
         method: GET
         status_code: 200
         timeout: 15
-      register: http_check
       retries: 5
       delay: 5
       until: http_check.status == 200
-
-    - name: "[verify] Sprawdź healthcheck kontenera"
-      ansible.builtin.command: >
-        docker inspect --format="{{ '{{' }}.State.Health.Status{{ '}}' }}"
-        {{ container_name }}
-      register: health_status
-      changed_when: false
-      retries: 6
-      delay: 10
-      until: health_status.stdout == "healthy"
-
-    - name: "[verify] Podsumowanie deploymentu"
-      ansible.builtin.debug:
-        msg:
-          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          - "✅ Deploy zakończony sukcesem"
-          - "   Kontener:  {{ container_name }}"
-          - "   Obraz:     {{ image_name }}:{{ image_tag }}"
-          - "   Port:      {{ host_port }} → {{ app_port }}"
-          - "   Health:    {{ health_status.stdout }}"
-          - "   HTTP:      {{ http_check.status }}"
-          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-    # ── CLEANUP ──────────────────────────────────────────────────────
-
-    - name: "[cleanup] Usuń nieużywane obrazy Docker (prune)"
-      community.docker.docker_prune:
-        images: yes
-        images_filters:
-          dangling: true
-      register: prune_result
-
-    - name: "[cleanup] Podsumowanie zwolnionego miejsca"
-      ansible.builtin.debug:
-        msg: "Zwolniono: {{ prune_result.images_space_reclaimed | default(0) | int // 1024 // 1024 }} MB"
-
-  # ── ROLLBACK ────────────────────────────────────────────────────────
-
-  rescue:
-
-    - name: "[rollback] ❌ Deploy nie powiódł się — próba rollbacku"
-      ansible.builtin.debug:
-        msg: "Deploy nie powiódł się. Przywracam poprzedni kontener."
-
-    - name: "[rollback] Zatrzymaj wadliwy kontener"
-      community.docker.docker_container:
-        name: "{{ container_name }}"
-        state: stopped
-      ignore_errors: yes
-
-    - name: "[rollback] Uruchom poprzedni obraz (jeśli istniał)"
-      community.docker.docker_container:
-        name: "{{ container_name }}"
-        image: "{{ running_image_id }}"
-        state: started
-        restart_policy: unless-stopped
-        published_ports:
-          - "{{ host_port }}:{{ app_port }}"
-      when: running_image_id | length > 0
-      ignore_errors: yes
-
-    - name: "[rollback] Zgłoś błąd po rollbacku"
-      ansible.builtin.fail:
-        msg: >
-          Deploy wersji {{ image_tag }} nie powiódł się.
-          Rollback do obrazu {{ running_image_id }} wykonany.
-          Sprawdź logi: docker logs {{ container_name }}
-
-  handlers:
-
-    - name: Restart Docker
-      ansible.builtin.systemd:
-        name: docker
-        state: restarted
+      register: http_check
