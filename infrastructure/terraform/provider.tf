@@ -4,10 +4,6 @@ terraform {
       source  = "bpg/proxmox"
       version = "~> 0.78"
     }
-    null = {
-      source  = "hashicorp/null"
-      version = "~> 3.0"
-    }
   }
 }
 
@@ -22,7 +18,7 @@ variable "root_password" {
 }
 
 provider "proxmox" {
-  endpoint  = "https://192.168.56.101:8006/"
+  endpoint  = "https://172.31.30.52:8006/" 
   api_token = var.api_token
   insecure  = true
 

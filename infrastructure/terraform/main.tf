@@ -1,4 +1,3 @@
-# 1. Definicja danych - TEGO BRAKOWAŁO W TWOIM OSTATNIM BUILDZIE
 data "proxmox_virtual_environment_vms" "template" {
   node_name = "pve"
   filter {
@@ -7,23 +6,21 @@ data "proxmox_virtual_environment_vms" "template" {
   }
 }
 
-# 2. Definicja Maszyny Wirtualnej
 resource "proxmox_virtual_environment_vm" "moja_vm" {
   name      = "nextjs-server"
   node_name = "pve"
   
-  # WAŻNE: Musi być false, bo Proxmox nie odpali jej z domyślnym KVM
-  started   = false 
+  started   = true 
 
   clone {
-    # Referencja do bloku data powyżej
     vm_id = data.proxmox_virtual_environment_vms.template.vms[0].vm_id
     full  = false
+    retries = 2
   }
 
   cpu {
     cores = 2
-    type  = "qemu64"
+    type  = "host"
   }
 
   memory {
@@ -35,8 +32,10 @@ resource "proxmox_virtual_environment_vm" "moja_vm" {
     bridge = "vmbr0"
   }
 
+  # To jest kluczowe dla pobierania IP przez Jenkinsa
   agent {
     enabled = true
+    timeout = "15m"
   }
 
   initialization {
@@ -53,32 +52,6 @@ resource "proxmox_virtual_environment_vm" "moja_vm" {
   }
 }
 
-# 3. Skrypt naprawczy KVM i startujący maszynę
-resource "null_resource" "fix_kvm_and_start" {
-  triggers = {
-    vm_id = proxmox_virtual_environment_vm.moja_vm.id
-  }
-
-  depends_on = [proxmox_virtual_environment_vm.moja_vm]
-
-  connection {
-    type     = "ssh"
-    host     = "192.168.56.101"
-    user     = "root"
-    password = var.root_password
-  }
-
-  provisioner "remote-exec" {
-    inline = [
-      "echo 'Wyłączam KVM dla VM ${proxmox_virtual_environment_vm.moja_vm.vm_id}...'",
-      "qm set ${proxmox_virtual_environment_vm.moja_vm.vm_id} --kvm 0",
-      "echo 'Startuję maszynę...'",
-      "qm start ${proxmox_virtual_environment_vm.moja_vm.vm_id}"
-    ]
-  }
-}
-
-# 4. Outputy dla Jenkinsa
 output "vm_ip" {
   value = try(flatten(proxmox_virtual_environment_vm.moja_vm.ipv4_addresses)[0], "")
 }
