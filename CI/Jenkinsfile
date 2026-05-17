@@ -3,6 +3,7 @@ pipeline {
 
     tools {
         terraform 'Terraform-latest' // Nazwa musi być taka sama jak w Manage Jenkins -> Tools
+        ansible 'Ansible-latest' 
     }
 
     parameters {
