@@ -54,7 +54,9 @@ resource "proxmox_virtual_environment_vm" "moja_vm" {
 
 output "vm_ip" {
   value = try(
-    [for addr in flatten(proxmox_virtual_environment_vm.moja_vm.ipv4_addresses) : addr if !can(regex(":", addr))][0],
+    [for addr in flatten(proxmox_virtual_environment_vm.moja_vm.ipv4_addresses) : 
+      addr if addr != "127.0.0.1" && !can(regex(":", addr))
+    ][0], 
     ""
   )
 }

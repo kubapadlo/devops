@@ -114,11 +114,11 @@ pipeline {
                                     // Pobieramy IP z outputu
                                     vmIp = sh(script: "terraform output -raw vm_ip", returnStdout: true).trim()
                                     
-                                    if (vmIp != "" && !vmIp.contains("Warning") && !vmIp.contains("Error")) {
-                                        echo "Znaleziono IP: ${vmIp}"
+                                    if (vmIp != "" && vmIp != "127.0.0.1" && !vmIp.contains("Warning") && !vmIp.contains("Error")) {
+                                        echo "Znaleziono właściwe IP: ${vmIp}"
                                         return true
                                     } else {
-                                        echo "IP jeszcze nie jest dostępne w Terraform State, ponawiam..."
+                                        echo "Otrzymano '${vmIp}' - to nie jest adres sieciowy. Czekam na DHCP..."
                                         sleep 10
                                         return false
                                     }
