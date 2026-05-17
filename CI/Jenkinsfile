@@ -97,25 +97,39 @@ pipeline {
                     sshUserPrivateKey(credentialsId: 'ansible-ssh-key', keyFileVariable: 'SSH_KEY')
                 ]) {
                     dir("${TERRAFORM_DIR}") {
+                        echo "Inicjalizacja i nakładanie planu Terraform..."
                         sh "terraform init"
                         sh "terraform apply -auto-approve -var='api_token=${PROXMOX_TOKEN}' -var='root_password=${PROXMOX_PASS}'"
                         
                         script {
-                            echo "Czekam na przydzielenie IP przez QEMU Guest Agent..."
+                            echo "Czekam na przydzielenie IP przez QEMU Guest Agent (max 3 minuty)..."
                             def vmIp = ""
                             
-                            // Próbujemy pobrać IP przez max 2 minuty (12 prób co 10s)
-                            timeout(time: 2, unit: 'MINUTES') {
+                            // Pętla waitUntil odpytuje Proxmoxa dopóki nie otrzyma adresu IP
+                            timeout(time: 3, unit: 'MINUTES') {
                                 waitUntil {
-                                    sh "terraform refresh -var='api_token=${PROXMOX_TOKEN}' -var='root_password=${PROXMOX_PASS}'"
+                                    // Wymuszamy odświeżenie stanu z API Proxmoxa
+                                    sh "terraform apply -refresh-only -auto-approve -var='api_token=${PROXMOX_TOKEN}' -var='root_password=${PROXMOX_PASS}'"
+                                    
+                                    // Pobieramy IP z outputu
                                     vmIp = sh(script: "terraform output -raw vm_ip", returnStdout: true).trim()
-                                    return (vmIp != "" && !vmIp.contains("Warning"))
+                                    
+                                    if (vmIp != "" && !vmIp.contains("Warning") && !vmIp.contains("Error")) {
+                                        echo "Znaleziono IP: ${vmIp}"
+                                        return true
+                                    } else {
+                                        echo "IP jeszcze nie jest dostępne w Terraform State, ponawiam..."
+                                        sleep 10
+                                        return false
+                                    }
                                 }
                             }
 
-                            echo "Pobrano IP: ${vmIp}"
+                            // Zapisujemy IP do pliku dla następnego etapu (Deploy)
                             writeFile(file: "vm_ip.txt", text: vmIp)
 
+                            // Generujemy dynamicznie plik inventory dla Ansible
+                            echo "Generowanie pliku inventory dla Ansible..."
                             writeFile(
                                 file: "../../${ANSIBLE_DIR}/inventory/hosts.ini",
                                 text: """[Endpoints]
