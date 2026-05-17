@@ -14,13 +14,19 @@ resource "proxmox_virtual_environment_vm" "moja_vm" {
 
   clone {
     vm_id = data.proxmox_virtual_environment_vms.template.vms[0].vm_id
-    full  = false
+    full  = true
     retries = 2
   }
 
   cpu {
     cores = 2
     type  = "host"
+  }
+
+  disk {
+    datastore_id = "local-lvm"  
+    interface    = "scsi0"
+    size         = 10            
   }
 
   memory {
