@@ -178,9 +178,9 @@ ansible_ssh_common_args='-o StrictHostKeyChecking=no'
                         sh """
                             timeout 120 bash -c '
                                 until ansible Endpoints \
-                                    -i ${ANSIBLE_DIR}/inventory/hosts.ini \
-                                    --private-key=${SSH_KEY} \
-                                    -m ping 2>/dev/null; do
+                                -i ${ANSIBLE_DIR}/inventory/hosts.ini \
+                                --private-key=${SSH_KEY} \
+                                -m ping -vvv; do
                                     echo "SSH nie odpowiada, ponawiam za 5s..."
                                     sleep 5
                                 done
