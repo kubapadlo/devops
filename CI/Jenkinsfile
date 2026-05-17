@@ -192,7 +192,7 @@ ansible_ssh_common_args='-o StrictHostKeyChecking=no'
                             ansible-playbook ${ANSIBLE_DIR}/playbook.yml \
                                 --private-key=${SSH_KEY} \
                                 -i ${ANSIBLE_DIR}/inventory/hosts.ini \
-                                --extra-vars "image_name=${REGISTRY_IMAGE} image_tag=${VERSION}"
+                                --extra-vars "image_name=${REGISTRY_IMAGE}"
                         """
                     }
                 }
