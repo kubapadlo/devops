@@ -13,25 +13,20 @@
 
   tasks:
 
-    # ── CZYSZCZENIE I INSTALACJA DOCKERA ─────────────────────────────
+    # ── INSTALACJA DOCKERA ───────────────────────────────────────────
 
-    - name: Usuń stare wersje Dockera (jeśli istnieją)
-      ansible.builtin.apt:
-        name: [docker.io, docker-doc, docker-compose, podman-docker, containerd, runc]
-        state: absent
-
-    - name: Zainstaluj wymagane pakiety pomocnicze
+    - name: Zainstaluj wymagane pakiety
       ansible.builtin.apt:
         name: [ca-certificates, curl, gnupg, python3-docker]
         state: present
         update_cache: yes
 
-    - name: Dodaj klucz GPG Dockera
+    - name: Dodaj klucz GPG i repozytorium Docker
       ansible.builtin.apt_key:
         url: https://download.docker.com/linux/ubuntu/gpg
         state: present
 
-    - name: Dodaj oficjalne repozytorium Docker
+    - name: Dodaj repozytorium
       ansible.builtin.apt_repository:
         repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
         state: present
@@ -40,7 +35,6 @@
       ansible.builtin.apt:
         name: [docker-ce, docker-ce-cli, containerd.io]
         state: present
-        update_cache: yes
 
     - name: Uruchom Docker
       ansible.builtin.systemd:
@@ -48,14 +42,14 @@
         state: started
         enabled: yes
 
-    # ── DUCKDNS IP UPDATE ────────────────────────────────────────────
+    # ── AKTUALIZACJA DUCKDNS ─────────────────────────────────────────
 
-    - name: Aktualizuj adres IP w DuckDNS
+    - name: Aktualizuj DuckDNS IP
       ansible.builtin.get_url:
         url: "https://www.duckdns.org/update?domains={{ duckdns_domain }}&token={{ duckdns_token }}&ip="
         dest: /tmp/duckdns_update.log
 
-    # ── KONFIGURACJA TRAEFIK ─────────────────────────────────────────
+    # ── KONFIGURACJA TRAEFIK (Z WYMUSZENIEM WERSJI API) ──────────────
 
     - name: Utwórz katalogi
       ansible.builtin.file:
@@ -70,7 +64,7 @@
         state: touch
         mode: '0600'
 
-    - name: Wgraj traefik.yml
+    - name: Wgraj traefik.yml (Wymuszenie API v1.41)
       ansible.builtin.copy:
         dest: /opt/traefik/traefik.yml
         content: |
@@ -97,23 +91,28 @@
           providers:
             docker:
               exposedByDefault: false
-              # Dodajemy wymuszenie wersji API wewnątrz pliku (opcjonalnie)
               endpoint: "unix:///var/run/docker.sock"
+              # KLUCZOWY FIX: Wymuszenie wersji API bezpośrednio w providerze
+              version: "1.41"
 
     - name: Utwórz sieć proxy
       community.docker.docker_network:
         name: proxy
         state: present
 
-    # ── URUCHOMIENIE TRAEFIK (Z FIXEM API) ───────────────────────────
+    # ── RESTART TRAEFIKA ─────────────────────────────────────────────
 
-    - name: Uruchom kontener Traefik
+    - name: Usuń stary kontener Traefik (force)
+      community.docker.docker_container:
+        name: traefik
+        state: absent
+
+    - name: Uruchom nowy kontener Traefik
       community.docker.docker_container:
         name: traefik
         image: "traefik:v3.3"
         state: started
         restart_policy: unless-stopped
-        recreate: yes # Wymuś przeładowanie przy zmianie konfiguracji
         published_ports:
           - "80:80"
           - "443:443"
@@ -123,16 +122,15 @@
           - /opt/traefik/acme.json:/acme.json
         env:
           DUCKDNS_TOKEN: "{{ duckdns_token }}"
-          # KLUCZOWY FIX: Wymuszamy wersję API Dockera
-          DOCKER_API_VERSION: "1.41" 
+          DOCKER_API_VERSION: "1.41"
         networks:
           - name: proxy
 
     # ── APLIKACJA ────────────────────────────────────────────────────
 
-    - name: Pobierz i uruchom aplikację (instancja 1)
+    - name: Uruchom instancje aplikacji
       community.docker.docker_container:
-        name: "{{ container_name }}-1"
+        name: "{{ container_name }}-{{ item }}"
         image: "{{ image_name }}:{{ image_tag }}"
         state: started
         restart_policy: unless-stopped
@@ -140,30 +138,16 @@
         networks: [{name: proxy}]
         labels:
           traefik.enable: "true"
-          traefik.http.routers.kanye-1.rule: "Host(`{{ duckdns_domain }}.duckdns.org`)"
-          traefik.http.routers.kanye-1.entrypoints: "websecure"
-          traefik.http.routers.kanye-1.tls.certresolver: "duckdns"
-          traefik.http.routers.kanye-1.service: "kanye-service"
+          traefik.http.routers.kanye-{{ item }}.rule: "Host(`{{ duckdns_domain }}.duckdns.org`)"
+          traefik.http.routers.kanye-{{ item }}.entrypoints: "websecure"
+          traefik.http.routers.kanye-{{ item }}.tls.certresolver: "duckdns"
+          traefik.http.routers.kanye-{{ item }}.service: "kanye-service"
           traefik.http.services.kanye-service.loadbalancer.server.port: "{{ app_port }}"
-
-    - name: Uruchom aplikację (instancja 2)
-      community.docker.docker_container:
-        name: "{{ container_name }}-2"
-        image: "{{ image_name }}:{{ image_tag }}"
-        state: started
-        restart_policy: unless-stopped
-        networks: [{name: proxy}]
-        labels:
-          traefik.enable: "true"
-          traefik.http.routers.kanye-2.rule: "Host(`{{ duckdns_domain }}.duckdns.org`)"
-          traefik.http.routers.kanye-2.entrypoints: "websecure"
-          traefik.http.routers.kanye-2.tls.certresolver: "duckdns"
-          traefik.http.routers.kanye-2.service: "kanye-service"
-          traefik.http.services.kanye-service.loadbalancer.server.port: "{{ app_port }}"
+      loop: [1, 2]
 
     # ── WERYFIKACJA ──────────────────────────────────────────────────
 
-    - name: Poczekaj na start i sprawdź lokalnie
+    - name: Sprawdź lokalnie
       ansible.builtin.uri:
         url: "https://127.0.0.1"
         method: GET
