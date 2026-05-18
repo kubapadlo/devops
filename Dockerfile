@@ -1,5 +1,5 @@
 # ETAP 1: Instalacja zależności
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS deps
 RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /app
 COPY package.json pnpm-lock.yaml* ./
@@ -7,7 +7,7 @@ RUN pnpm install --frozen-lockfile
 
 # ETAP 2: Budowanie
 # Wymagane: next.config.js musi zawierać output: 'standalone'
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
@@ -16,7 +16,7 @@ COPY . .
 RUN pnpm build
 
 # ETAP 3: Produkcja
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
