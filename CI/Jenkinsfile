@@ -134,6 +134,7 @@ pipeline {
 
                         sh """
                             ansible-playbook ${ANSIBLE_DIR}/playbook.yml \
+                                --private-key=${SSH_KEY} \
                                 -i ${ANSIBLE_DIR}/inventory/hosts.ini \
                                 --extra-vars "image_name=${REGISTRY_IMAGE} duckdns_token=${DUCKDNS_TOKEN}"
                         """
