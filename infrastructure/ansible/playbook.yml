@@ -49,6 +49,20 @@
         name: docker
         state: started
         enabled: yes
+    
+    - name: Czekaj na socket Dockera
+      ansible.builtin.wait_for:
+        path: /var/run/docker.sock
+        state: present
+        timeout: 30
+
+    - name: Sprawdź czy Docker odpowiada
+      ansible.builtin.command: docker info
+      register: docker_info
+      changed_when: false
+      retries: 5
+      delay: 5
+      until: docker_info.rc == 0
 
     # ── DUCKDNS IP UPDATE ────────────────────────────────────────────
 
