@@ -13,9 +13,9 @@
 
   tasks:
 
-    # ── INSTALACJA DOCKERA ───────────────────────────────────────────
+    # ── INSTALACJA DOCKER CE (NAJNOWSZA WERSJA) ──────────────────────
 
-    - name: Zainstaluj wymagane pakiety
+    - name: Zainstaluj pakiety pomocnicze
       ansible.builtin.apt:
         name: [ca-certificates, curl, gnupg, python3-docker]
         state: present
@@ -26,7 +26,7 @@
         url: https://download.docker.com/linux/ubuntu/gpg
         state: present
 
-    - name: Dodaj repozytorium
+    - name: Dodaj repozytorium Docker
       ansible.builtin.apt_repository:
         repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
         state: present
@@ -42,14 +42,14 @@
         state: started
         enabled: yes
 
-    # ── AKTUALIZACJA DUCKDNS ─────────────────────────────────────────
+    # ── DUCKDNS UPDATE ───────────────────────────────────────────────
 
     - name: Aktualizuj DuckDNS IP
       ansible.builtin.get_url:
         url: "https://www.duckdns.org/update?domains={{ duckdns_domain }}&token={{ duckdns_token }}&ip="
         dest: /tmp/duckdns_update.log
 
-    # ── KONFIGURACJA TRAEFIK (Z WYMUSZENIEM WERSJI API) ──────────────
+    # ── KONFIGURACJA TRAEFIK (CZYSTA) ────────────────────────────────
 
     - name: Utwórz katalogi
       ansible.builtin.file:
@@ -64,7 +64,7 @@
         state: touch
         mode: '0600'
 
-    - name: Wgraj traefik.yml (Wymuszenie API v1.41)
+    - name: Wgraj traefik.yml (BEZ POLA VERSION)
       ansible.builtin.copy:
         dest: /opt/traefik/traefik.yml
         content: |
@@ -92,22 +92,20 @@
             docker:
               exposedByDefault: false
               endpoint: "unix:///var/run/docker.sock"
-              # KLUCZOWY FIX: Wymuszenie wersji API bezpośrednio w providerze
-              version: "1.41"
 
     - name: Utwórz sieć proxy
       community.docker.docker_network:
         name: proxy
         state: present
 
-    # ── RESTART TRAEFIKA ─────────────────────────────────────────────
+    # ── RESTART TRAEFIKA Z FIXEM API ─────────────────────────────────
 
-    - name: Usuń stary kontener Traefik (force)
+    - name: Usuń stary kontener Traefik (wymuszenie czystego startu)
       community.docker.docker_container:
         name: traefik
         state: absent
 
-    - name: Uruchom nowy kontener Traefik
+    - name: Uruchom Traefik (v3.3)
       community.docker.docker_container:
         name: traefik
         image: "traefik:v3.3"
@@ -122,13 +120,14 @@
           - /opt/traefik/acme.json:/acme.json
         env:
           DUCKDNS_TOKEN: "{{ duckdns_token }}"
+          # TO JEST JEDYNY POPRAWNY SPOSÓB WYMUSZENIA WERSJI W TRAEFIKU v3
           DOCKER_API_VERSION: "1.41"
         networks:
           - name: proxy
 
     # ── APLIKACJA ────────────────────────────────────────────────────
 
-    - name: Uruchom instancje aplikacji
+    - name: Uruchom aplikację (instancje 1 i 2)
       community.docker.docker_container:
         name: "{{ container_name }}-{{ item }}"
         image: "{{ image_name }}:{{ image_tag }}"
@@ -147,7 +146,7 @@
 
     # ── WERYFIKACJA ──────────────────────────────────────────────────
 
-    - name: Sprawdź lokalnie
+    - name: Sprawdź lokalnie przez nagłówek Host
       ansible.builtin.uri:
         url: "https://127.0.0.1"
         method: GET
@@ -155,6 +154,6 @@
         headers:
           Host: "{{ duckdns_domain }}.duckdns.org"
       register: https_check
-      retries: 20
+      retries: 25
       delay: 15
       until: https_check.status == 200
