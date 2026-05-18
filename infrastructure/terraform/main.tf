@@ -13,7 +13,7 @@ resource "proxmox_virtual_environment_vm" "moja_vm" {
   started   = true 
 
   clone {
-    vm_id = 9000
+    vm_id = data.proxmox_virtual_environment_vms.template.vms[0].vm_id
     full  = true
     retries = 2
   }

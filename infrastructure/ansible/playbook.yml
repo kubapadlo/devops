@@ -1,70 +1,164 @@
----
-- name: Deploy kanye-counter na serwerze produkcyjnym
-  hosts: Endpoints
-  become: yes
-  gather_facts: yes
+vars:
+  container_name: "kanye-counter-app"
+  image_name: "jpadlo/kanye-counter"
+  image_tag: "latest"
+  app_port: 3000
+  duckdns_domain: "kanye-countdown"     
+  letsencrypt_email: "jpadlo@student.agh.edu.pl"
 
-  vars:
-    container_name: "kanye-counter-app"
-    image_name: "jpadlo/kanye-counter"
-    image_tag: "latest"
-    app_port: 3000
-    host_port: 3000
+tasks:
 
-  tasks:
+  # ── DOCKER ───────────────────────────────────────────────────────
 
-    # ── DOCKER ───────────────────────────────────────────────────────
+  - name: Zainstaluj Docker i zależności
+    ansible.builtin.apt:
+      name:
+        - docker.io
+        - python3-docker
+      state: present
+      update_cache: yes
 
-    - name: Zainstaluj Docker i zależności
-      ansible.builtin.apt:
-        name:
-          - docker.io
-          - python3-docker
-        state: present
-        update_cache: yes
+  - name: Uruchom i włącz Docker przy starcie
+    ansible.builtin.systemd:
+      name: docker
+      state: started
+      enabled: yes
 
-    - name: Uruchom i włącz Docker przy starcie
-      ansible.builtin.systemd:
-        name: docker
-        state: started
-        enabled: yes
+  # ── KATALOGI I KONFIGURACJA ───────────────────────────────────────
 
-    # ── DEPLOY KONTENERA ─────────────────────────────────────────────
+  - name: Utwórz katalogi dla Traefik
+    ansible.builtin.file:
+      path: "{{ item }}"
+      state: directory
+      mode: '0755'
+    loop:
+      - /opt/traefik
+      - /opt/traefik/config
 
-    - name: Pobierz najnowszy obraz
-      community.docker.docker_image:
-        name: "{{ image_name }}"
-        tag: "{{ image_tag }}"
-        source: pull
-        force_source: yes
+  - name: Utwórz pusty plik acme.json (certyfikaty)
+    ansible.builtin.file:
+      path: /opt/traefik/acme.json
+      state: touch
+      mode: '0600'      
 
-    - name: Uruchom kontener
-      community.docker.docker_container:
-        name: "{{ container_name }}"
-        image: "{{ image_name }}:{{ image_tag }}"
-        state: started
-        restart_policy: unless-stopped
-        published_ports:
-          - "{{ host_port }}:{{ app_port }}"
-        env:
-          NODE_ENV: "production"
+  - name: Wgraj traefik.yml
+    ansible.builtin.copy:
+      dest: /opt/traefik/traefik.yml
+      content: |
+        api:
+          dashboard: false
 
-    # ── WERYFIKACJA ──────────────────────────────────────────────────
+        entryPoints:
+          web:
+            address: ":80"
+            http:
+              redirections:
+                entryPoint:
+                  to: websecure
+                  scheme: https
+          websecure:
+            address: ":443"
 
-    - name: Poczekaj aż port będzie dostępny
-      ansible.builtin.wait_for:
-        host: localhost
-        port: "{{ host_port }}"
-        delay: 5
-        timeout: 60
+        certificatesResolvers:
+          duckdns:
+            acme:
+              email: {{ letsencrypt_email }}
+              storage: /acme.json
+              dnsChallenge:
+                provider: duckdns
+                delayBeforeCheck: 30
 
-    - name: Sprawdź HTTP
-      ansible.builtin.uri:
-        url: "http://localhost:{{ host_port }}"
-        method: GET
-        status_code: 200
-        timeout: 15
-      retries: 5
+        providers:
+          docker:
+            exposedByDefault: false
+
+  # ── SIEĆ DOCKER ──────────────────────────────────────────────────
+
+  - name: Utwórz sieć Docker dla proxy
+    community.docker.docker_network:
+      name: proxy
+      state: present
+
+  # ── TRAEFIK ──────────────────────────────────────────────────────
+
+  - name: Uruchom kontener Traefik
+    community.docker.docker_container:
+      name: traefik
+      image: "traefik:v3.3"
+      state: started
+      restart_policy: unless-stopped
+      published_ports:
+        - "80:80"
+        - "443:443"
+      volumes:
+        - /var/run/docker.sock:/var/run/docker.sock:ro
+        - /opt/traefik/traefik.yml:/traefik.yml:ro
+        - /opt/traefik/acme.json:/acme.json
+      env:
+        DUCKDNS_TOKEN: "{{ duckdns_token }}"
+      networks:
+        - name: proxy
+
+  # ── APLIKACJA ────────────────────────────────────────────────────
+
+  - name: Pobierz najnowszy obraz
+    community.docker.docker_image:
+      name: "{{ image_name }}"
+      tag: "{{ image_tag }}"
+      source: pull
+      force_source: yes
+
+  - name: Uruchom kontener aplikacji (instancja 1)
+    community.docker.docker_container:
+      name: "{{ container_name }}-1"
+      image: "{{ image_name }}:{{ image_tag }}"
+      state: started
+      restart_policy: unless-stopped
+      networks:
+        - name: proxy
+      labels:
+        traefik.enable: "true"
+        # UNIKALNA NAZWA ROUTERA: kanye-1
+        traefik.http.routers.kanye-1.rule: "Host(`{{ duckdns_domain }}.duckdns.org`)"
+        traefik.http.routers.kanye-1.entrypoints: "websecure"
+        traefik.http.routers.kanye-1.tls.certresolver: "duckdns"
+        # WSPÓLNA NAZWA SERWISU (dla Load Balancingu)
+        traefik.http.routers.kanye-1.service: "kanye-service"
+        traefik.http.services.kanye-service.loadbalancer.server.port: "{{ app_port }}"
+
+  - name: Uruchom kontener aplikacji (instancja 2)
+    community.docker.docker_container:
+      name: "{{ container_name }}-2"
+      image: "{{ image_name }}:{{ image_tag }}"
+      state: started
+      restart_policy: unless-stopped
+      networks:
+        - name: proxy
+      labels:
+        traefik.enable: "true"
+        # UNIKALNA NAZWA ROUTERA: kanye-2
+        traefik.http.routers.kanye-2.rule: "Host(`{{ duckdns_domain }}.duckdns.org`)"
+        traefik.http.routers.kanye-2.entrypoints: "websecure"
+        traefik.http.routers.kanye-2.tls.certresolver: "duckdns"
+        # TA SAMA NAZWA SERWISU - Traefik automatycznie zrobi Round Robin
+        traefik.http.routers.kanye-2.service: "kanye-service"
+        traefik.http.services.kanye-service.loadbalancer.server.port: "{{ app_port }}"
+
+  # ── WERYFIKACJA ──────────────────────────────────────────────────
+
+  - name: Poczekaj aż Traefik wystartuje
+    ansible.builtin.wait_for:
+      port: 443
       delay: 5
-      until: http_check.status == 200
-      register: http_check
+      timeout: 60
+
+  - name: Sprawdź HTTPS
+    ansible.builtin.uri:
+      url: "https://{{ duckdns_domain }}.duckdns.org"
+      method: GET
+      status_code: 200
+      timeout: 30
+    retries: 10
+    delay: 10
+    until: https_check.status == 200
+    register: https_check
