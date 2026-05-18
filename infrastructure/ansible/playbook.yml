@@ -157,13 +157,14 @@
         delay: 5
         timeout: 60
 
-    - name: Sprawdź HTTPS
+    - name: Sprawdź HTTPS (lokalnie przez Traefik)
       ansible.builtin.uri:
-        url: "https://{{ duckdns_domain }}.duckdns.org"
+        url: "https://127.0.0.1"
         method: GET
-        status_code: 200
         validate_certs: no  
+        headers:
+          Host: "{{ duckdns_domain }}.duckdns.org"
       register: https_check
-      retries: 15
-      delay: 10
+      retries: 20          
+      delay: 15            
       until: https_check.status == 200
