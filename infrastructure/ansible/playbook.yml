@@ -120,8 +120,8 @@
           - /opt/traefik/acme.json:/acme.json
         env:
           DUCKDNS_TOKEN: "{{ duckdns_token }}"
-          # TO JEST JEDYNY POPRAWNY SPOSÓB WYMUSZENIA WERSJI W TRAEFIKU v3
-          DOCKER_API_VERSION: "1.41"
+        groups:
+          - "988"
         networks:
           - name: proxy
 
