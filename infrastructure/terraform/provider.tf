@@ -1,4 +1,8 @@
 terraform {
+  backend "local" {
+    path = "/var/jenkins_home/terraform-state/kanye-counter.tfstate"
+  }
+
   required_providers {
     proxmox = {
       source  = "bpg/proxmox"
