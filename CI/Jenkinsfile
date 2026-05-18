@@ -105,7 +105,7 @@ pipeline {
                                 }
                             }
                             
-                            writeFile(file: "../vm_ip.txt", text: vmIp)
+                            writeFile(file: "${WORKSPACE}/vm_ip.txt", text: vmIp) 
                         }
                     } 
                 } 
@@ -121,11 +121,11 @@ pipeline {
                 ]) {
                     script {
                         def targetIp = ""
-                        if (fileExists('vm_ip.txt')) {
-                            targetIp = readFile('vm_ip.txt').trim()
-                        } else {
-                            error "Nie odnaleziono pliku vm_ip.txt! Czy Terraform zadziałał poprawnie?"
-                        }
+                            if (fileExists("${WORKSPACE}/vm_ip.txt")) {
+                                targetIp = readFile("${WORKSPACE}/vm_ip.txt").trim()
+                            } else {
+                                error "Nie odnaleziono pliku ${WORKSPACE}/vm_ip.txt! Czy Terraform zadziałał poprawnie?"
+                            }
 
                         writeFile(
                             file: "${ANSIBLE_DIR}/inventory/hosts.ini",
