@@ -12,11 +12,11 @@
 
   tasks:
 
-    # ── INSTALACJA DOCKER CE ─────────────────────────────────────────
+    # ── PRZYGOTOWANIE SYSTEMU ────────────────────────────────────────
 
-    - name: Zainstaluj pakiety pomocnicze
+    - name: Zainstaluj pakiety (Docker, Nginx, OpenSSL)
       ansible.builtin.apt:
-        name: [ca-certificates, curl, gnupg, python3-docker, openssl]
+        name: [ca-certificates, curl, gnupg, python3-docker, openssl, nginx]
         state: present
         update_cache: yes
 
@@ -41,14 +41,8 @@
         state: started
         enabled: yes
 
-    # ── INSTALACJA NGINX ─────────────────────────────────────────────
-
-    - name: Zainstaluj nginx
-      ansible.builtin.apt:
-        name: nginx
-        state: present
-
-    # ── GENEROWANIE CERTYFIKATU SSL (SAMOPODPISANY) ──────────────────
+    # ── SSL (SELF-SIGNED) ────────────────────────────────────────────
+    # Generujemy certyfikat lokalnie, bo Certbot nie zadziała bez publicznego IP
 
     - name: Utwórz katalog na certyfikaty
       ansible.builtin.file:
@@ -56,7 +50,7 @@
         state: directory
         mode: '0755'
 
-    - name: Wygeneruj Self-Signed SSL certificate
+    - name: Wygeneruj certyfikat SSL (ważny 1 rok)
       ansible.builtin.command: >
         openssl req -x509 -nodes -days 365 -newkey rsa:2048
         -keyout /etc/nginx/ssl/nginx.key
@@ -65,29 +59,14 @@
       args:
         creates: /etc/nginx/ssl/nginx.crt
 
-    # ── DUCKDNS UPDATE ───────────────────────────────────────────────
+    # ── KONTENERY APLIKACJI ──────────────────────────────────────────
 
-    - name: Aktualizuj DuckDNS IP (informacyjnie)
-      ansible.builtin.get_url:
-        url: "https://www.duckdns.org/update?domains={{ duckdns_domain }}&token={{ duckdns_token }}&ip="
-        dest: /tmp/duckdns_update.log
-
-    # ── SIEĆ DOCKER ──────────────────────────────────────────────────
-
-    - name: Utwórz sieć proxy
+    - name: Utwórz sieć Docker dla proxy
       community.docker.docker_network:
         name: proxy
         state: present
 
-    # ── APLIKACJA ────────────────────────────────────────────────────
-
-    - name: Zatrzymaj i usuń stare kontenery aplikacji
-      community.docker.docker_container:
-        name: "{{ container_name }}-{{ item }}"
-        state: absent
-      loop: [1, 2]
-
-    - name: Uruchom aplikację (instancje 1 i 2)
+    - name: Uruchom dwie instancje aplikacji (Load Balancing)
       community.docker.docker_container:
         name: "{{ container_name }}-{{ item.name }}"
         image: "{{ image_name }}:{{ image_tag }}"
@@ -102,9 +81,9 @@
         - { name: "1", port: 3001 }
         - { name: "2", port: 3002 }
 
-    # ── NGINX KONFIGURACJA ───────────────────────────────────────────
+    # ── KONFIGURACJA NGINX ───────────────────────────────────────────
 
-    - name: Wgraj konfigurację nginx (HTTPS z Self-Signed)
+    - name: Wgraj konfigurację Load Balancera (HTTPS)
       ansible.builtin.copy:
         dest: /etc/nginx/sites-available/kanye
         content: |
@@ -135,22 +114,18 @@
               }
           }
 
-    - name: Włącz konfigurację nginx
+    - name: Aktywuj konfigurację i usuń domyślną
       ansible.builtin.file:
         src: /etc/nginx/sites-available/kanye
         dest: /etc/nginx/sites-enabled/kanye
         state: link
 
-    - name: Usuń domyślną konfigurację nginx
+    - name: Usuń default nginx site
       ansible.builtin.file:
         path: /etc/nginx/sites-enabled/default
         state: absent
 
-    - name: Przetestuj konfigurację nginx
-      ansible.builtin.command: nginx -t
-      changed_when: false
-
-    - name: Uruchom i przeładuj nginx
+    - name: Zrestartuj Nginx
       ansible.builtin.systemd:
         name: nginx
         state: restarted
@@ -158,14 +133,13 @@
 
     # ── WERYFIKACJA ──────────────────────────────────────────────────
 
-    - name: Sprawdź czy aplikacja odpowiada przez HTTPS (ignorując certyfikat)
+    - name: Sprawdź czy strona odpowiada (lokalnie przez HTTPS)
       ansible.builtin.uri:
-        url: "https://localhost"
-        method: GET
-        validate_certs: no  # To jest kluczowe przy certyfikacie samopodpisanym
+        url: "https://127.0.0.1"
+        validate_certs: no
         headers:
           Host: "{{ fqdn }}"
-      register: https_check
+      register: result
+      until: result.status == 200
       retries: 5
       delay: 5
-      until: https_check.status == 200
