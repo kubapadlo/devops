@@ -105,10 +105,10 @@
         name: traefik
         state: absent
 
-    - name: Uruchom Traefik (v3.3)
+    - name: Uruchom Traefik (v3.4)
       community.docker.docker_container:
         name: traefik
-        image: "traefik:v3.3"
+        image: "traefik:v3.4"
         state: started
         restart_policy: unless-stopped
         published_ports:
