@@ -100,17 +100,16 @@ pipeline {
                             def vmIp = ""
                             timeout(time: 5, unit: 'MINUTES') {
                                 waitUntil {
-                                    // Zamiast apply --refresh, używamy tylko output
                                     vmIp = sh(script: "terraform output -raw vm_ip", returnStdout: true).trim()
                                     return (vmIp != "" && !vmIp.contains("Warning") && vmIp != "127.0.0.1")
                                 }
                             }
-                            // Zapisujemy w głównym katalogu projektu, by Deploy go widział
+                            
                             writeFile(file: "../vm_ip.txt", text: vmIp)
                         }
-                    }
-                }
-            }
+                    } 
+                } 
+            } 
         }
 
         stage('Deploy') {
@@ -121,7 +120,6 @@ pipeline {
                     string(credentialsId: 'duckdns-token', variable: 'DUCKDNS_TOKEN')
                 ]) {
                     script {
-                        // Pobieramy IP z pliku zapisanego w poprzednim kroku
                         def targetIp = ""
                         if (fileExists('vm_ip.txt')) {
                             targetIp = readFile('vm_ip.txt').trim()
@@ -129,13 +127,11 @@ pipeline {
                             error "Nie odnaleziono pliku vm_ip.txt! Czy Terraform zadziałał poprawnie?"
                         }
 
-                        // Generowanie hostów
                         writeFile(
                             file: "${ANSIBLE_DIR}/inventory/hosts.ini",
                             text: "[Endpoints]\n${targetIp} ansible_user=ubuntu ansible_ssh_private_key_file=${SSH_KEY}\n"
                         )
 
-                        // Przekazujemy DOKŁADNY TAG OBRAZU (VERSION) do Ansible
                         sh """
                             ansible-playbook ${ANSIBLE_DIR}/playbook.yml \
                                 -i ${ANSIBLE_DIR}/inventory/hosts.ini \
@@ -145,6 +141,7 @@ pipeline {
                 }
             }
         }
+    } 
 
     post {
         always {
