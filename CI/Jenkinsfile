@@ -99,7 +99,7 @@ pipeline {
                 ]) {
                     dir("${TERRAFORM_DIR}") {
                         echo "Inicjalizacja i nakładanie planu Terraform..."
-                        sh "terraform init -reconfigure"
+                        sh "terraform init"
                         sh "terraform apply -auto-approve -var='api_token=${PROXMOX_TOKEN}' -var='root_password=${PROXMOX_PASS}'"
                         
                         script {
