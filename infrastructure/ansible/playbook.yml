@@ -1,19 +1,20 @@
 ---
-- name: Deploy Kanye Counter App with Traefik
+- name: Deploy Kanye Counter App with Nginx + Certbot
   hosts: Endpoints
   become: yes
-  
+
   vars:
     container_name: "kanye-counter-app"
     image_name: "jpadlo/kanye-counter"
     image_tag: "latest"
     app_port: 3000
-    duckdns_domain: "kanye-countdown"     
+    duckdns_domain: "kanye-countdown"
     letsencrypt_email: "jpadlo@student.agh.edu.pl"
+    fqdn: "{{ duckdns_domain }}.duckdns.org"
 
   tasks:
 
-    # ── INSTALACJA DOCKER CE (NAJNOWSZA WERSJA) ──────────────────────
+    # ── INSTALACJA DOCKER CE ─────────────────────────────────────────
 
     - name: Zainstaluj pakiety pomocnicze
       ansible.builtin.apt:
@@ -21,7 +22,7 @@
         state: present
         update_cache: yes
 
-    - name: Dodaj klucz GPG i repozytorium Docker
+    - name: Dodaj klucz GPG Docker
       ansible.builtin.apt_key:
         url: https://download.docker.com/linux/ubuntu/gpg
         state: present
@@ -42,6 +43,13 @@
         state: started
         enabled: yes
 
+    # ── INSTALACJA NGINX I CERTBOT ───────────────────────────────────
+
+    - name: Zainstaluj nginx i certbot
+      ansible.builtin.apt:
+        name: [nginx, certbot, python3-certbot-nginx]
+        state: present
+
     # ── DUCKDNS UPDATE ───────────────────────────────────────────────
 
     - name: Aktualizuj DuckDNS IP
@@ -49,110 +57,115 @@
         url: "https://www.duckdns.org/update?domains={{ duckdns_domain }}&token={{ duckdns_token }}&ip="
         dest: /tmp/duckdns_update.log
 
-    # ── KONFIGURACJA TRAEFIK (CZYSTA) ────────────────────────────────
-
-    - name: Utwórz katalogi
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: directory
-        mode: '0755'
-      loop: [/opt/traefik, /opt/traefik/config]
-
-    - name: Utwórz acme.json
-      ansible.builtin.file:
-        path: /opt/traefik/acme.json
-        state: touch
-        mode: '0600'
-
-    - name: Wgraj traefik.yml (BEZ POLA VERSION)
-      ansible.builtin.copy:
-        dest: /opt/traefik/traefik.yml
-        content: |
-          api:
-            dashboard: false
-          entryPoints:
-            web:
-              address: ":80"
-              http:
-                redirections:
-                  entryPoint:
-                    to: websecure
-                    scheme: https
-            websecure:
-              address: ":443"
-          certificatesResolvers:
-            duckdns:
-              acme:
-                email: {{ letsencrypt_email }}
-                storage: /acme.json
-                dnsChallenge:
-                  provider: duckdns
-                  delayBeforeCheck: 30
-          providers:
-            docker:
-              exposedByDefault: false
-              endpoint: "unix:///var/run/docker.sock"
+    # ── SIEĆ DOCKER ──────────────────────────────────────────────────
 
     - name: Utwórz sieć proxy
       community.docker.docker_network:
         name: proxy
         state: present
 
-    # ── RESTART TRAEFIKA Z FIXEM API ─────────────────────────────────
-
-    - name: Usuń stary kontener Traefik (wymuszenie czystego startu)
-      community.docker.docker_container:
-        name: traefik
-        state: absent
-
-    - name: Uruchom Traefik (v3.4)
-      community.docker.docker_container:
-        name: traefik
-        image: "traefik:v3.4"
-        state: started
-        restart_policy: unless-stopped
-        published_ports:
-          - "80:80"
-          - "443:443"
-        volumes:
-          - /var/run/docker.sock:/var/run/docker.sock:ro
-          - /opt/traefik/traefik.yml:/traefik.yml:ro
-          - /opt/traefik/acme.json:/acme.json
-        user: "root"
-        env:
-          DUCKDNS_TOKEN: "{{ duckdns_token }}"
-        networks:
-          - name: proxy
-
     # ── APLIKACJA ────────────────────────────────────────────────────
+
+    - name: Zatrzymaj i usuń stare kontenery aplikacji
+      community.docker.docker_container:
+        name: "{{ container_name }}-{{ item }}"
+        state: absent
+      loop: [1, 2]
 
     - name: Uruchom aplikację (instancje 1 i 2)
       community.docker.docker_container:
-        name: "{{ container_name }}-{{ item }}"
+        name: "{{ container_name }}-{{ item.name }}"
         image: "{{ image_name }}:{{ image_tag }}"
         state: started
         restart_policy: unless-stopped
         pull: yes
-        networks: [{name: proxy}]
-        labels:
-          traefik.enable: "true"
-          traefik.http.routers.kanye-{{ item }}.rule: "Host(`{{ duckdns_domain }}.duckdns.org`)"
-          traefik.http.routers.kanye-{{ item }}.entrypoints: "websecure"
-          traefik.http.routers.kanye-{{ item }}.tls.certresolver: "duckdns"
-          traefik.http.routers.kanye-{{ item }}.service: "kanye-service"
-          traefik.http.services.kanye-service.loadbalancer.server.port: "{{ app_port }}"
-      loop: [1, 2]
+        networks:
+          - name: proxy
+        published_ports:
+          - "{{ item.port }}:{{ app_port }}"
+      loop:
+        - { name: "1", port: 3001 }
+        - { name: "2", port: 3002 }
+
+    # ── NGINX KONFIGURACJA (HTTP) ─────────────────────────────────────
+
+    - name: Wgraj konfigurację nginx (HTTP - przed certbotem)
+      ansible.builtin.copy:
+        dest: /etc/nginx/sites-available/kanye
+        content: |
+          upstream kanye_backend {
+              server 127.0.0.1:3001;
+              server 127.0.0.1:3002;
+          }
+
+          server {
+              listen 80;
+              server_name {{ fqdn }};
+
+              location / {
+                  proxy_pass http://kanye_backend;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+              }
+          }
+
+    - name: Włącz konfigurację nginx
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/kanye
+        dest: /etc/nginx/sites-enabled/kanye
+        state: link
+
+    - name: Usuń domyślną konfigurację nginx
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Przetestuj konfigurację nginx
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+    - name: Uruchom nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: restarted
+        enabled: yes
+
+    # ── CERTBOT (LET'S ENCRYPT) ──────────────────────────────────────
+
+    - name: Pobierz certyfikat SSL przez certbot
+      ansible.builtin.command: >
+        certbot --nginx
+        -d {{ fqdn }}
+        --email {{ letsencrypt_email }}
+        --agree-tos
+        --non-interactive
+        --redirect
+      args:
+        creates: /etc/letsencrypt/live/{{ fqdn }}/fullchain.pem
+
+    - name: Przeładuj nginx po certbocie
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
+
+    # ── AUTO-RENEWAL ─────────────────────────────────────────────────
+
+    - name: Włącz certbot timer (auto-renewal)
+      ansible.builtin.systemd:
+        name: certbot.timer
+        state: started
+        enabled: yes
 
     # ── WERYFIKACJA ──────────────────────────────────────────────────
 
-    - name: Sprawdź lokalnie przez nagłówek Host
+    - name: Sprawdź czy aplikacja odpowiada przez HTTPS
       ansible.builtin.uri:
-        url: "https://127.0.0.1"
+        url: "https://{{ fqdn }}"
         method: GET
-        validate_certs: no
-        headers:
-          Host: "{{ duckdns_domain }}.duckdns.org"
+        validate_certs: yes
       register: https_check
-      retries: 25
-      delay: 15
+      retries: 10
+      delay: 10
       until: https_check.status == 200
