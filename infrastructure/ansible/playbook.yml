@@ -118,10 +118,9 @@
           - /var/run/docker.sock:/var/run/docker.sock:ro
           - /opt/traefik/traefik.yml:/traefik.yml:ro
           - /opt/traefik/acme.json:/acme.json
+        user: "root"
         env:
           DUCKDNS_TOKEN: "{{ duckdns_token }}"
-        groups:
-          - "988"
         networks:
           - name: proxy
 
