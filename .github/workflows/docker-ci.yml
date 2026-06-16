@@ -36,7 +36,16 @@ jobs:
       # 3) Uruchomienie obrazu w kontenerze + prosty health check
       - name: Run container
         run: |
-          docker run -d --name app -p 3000:3000 app:ci
-          curl --retry 10 --retry-delay 2 --retry-connrefused -fsS http://localhost:3000 > /dev/null
-          echo "Kontener odpowiada na porcie 3000"
+          docker run -d --name app -e HOSTNAME=0.0.0.0 -p 3000:3000 app:ci
+          for i in $(seq 1 15); do
+            if curl -fsS http://localhost:3000 > /dev/null 2>&1; then
+              echo "Kontener odpowiada na porcie 3000"
+              docker rm -f app
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Kontener nie odpowiedzial - logi:"
+          docker logs app
           docker rm -f app
+          exit 1
