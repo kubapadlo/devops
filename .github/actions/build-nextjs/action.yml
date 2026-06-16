@@ -9,7 +9,7 @@ inputs:
   pnpm-version:
     description: "Wersja pnpm"
     required: false
-    default: "9"
+    default: "10"
   run-lint:
     description: "Czy uruchomić lint (true/false)"
     required: false

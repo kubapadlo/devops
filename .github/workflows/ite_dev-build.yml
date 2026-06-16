@@ -32,7 +32,7 @@ jobs:
         uses: ./.github/actions/build-nextjs
         with:
           node-version: "22"
-          pnpm-version: "9"
+          pnpm-version: "10"
 
       # Załączenie zbudowanego artefaktu za pomocą dedykowanej akcji
       - name: Upload artefaktu (standalone)
