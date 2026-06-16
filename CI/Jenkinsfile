@@ -1,11 +1,6 @@
 pipeline {
     agent any
 
-    tools {
-        terraform 'Terraform-latest' // Nazwa musi być taka sama jak w Manage Jenkins -> Tools
-        ansible 'Ansible-latest' 
-    }
-
     parameters {
         booleanParam(
             name: 'PROVISION_INFRA',
@@ -98,107 +93,61 @@ pipeline {
                     sshUserPrivateKey(credentialsId: 'ansible-ssh-key', keyFileVariable: 'SSH_KEY')
                 ]) {
                     dir("${TERRAFORM_DIR}") {
-                        echo "Inicjalizacja i nakładanie planu Terraform..."
-                        sh "terraform init -reconfigure"
+                        sh "terraform init"
                         sh "terraform apply -auto-approve -var='api_token=${PROXMOX_TOKEN}' -var='root_password=${PROXMOX_PASS}'"
                         
                         script {
-                            echo "Czekam na przydzielenie IP przez QEMU Guest Agent (max 3 minuty)..."
                             def vmIp = ""
-                            
-                            // Pętla waitUntil odpytuje Proxmoxa dopóki nie otrzyma adresu IP
-                            timeout(time: 3, unit: 'MINUTES') {
+                            timeout(time: 5, unit: 'MINUTES') {
                                 waitUntil {
-                                    // Wymuszamy odświeżenie stanu z API Proxmoxa
-                                    sh "terraform apply -refresh-only -auto-approve -var='api_token=${PROXMOX_TOKEN}' -var='root_password=${PROXMOX_PASS}'"
-                                    
-                                    // Pobieramy IP z outputu
                                     vmIp = sh(script: "terraform output -raw vm_ip", returnStdout: true).trim()
-                                    
-                                    if (vmIp != "" && vmIp != "127.0.0.1" && !vmIp.contains("Warning") && !vmIp.contains("Error")) {
-                                        echo "Znaleziono właściwe IP: ${vmIp}"
-                                        return true
-                                    } else {
-                                        echo "Otrzymano '${vmIp}' - to nie jest adres sieciowy. Czekam na DHCP..."
-                                        sleep 10
-                                        return false
-                                    }
+                                    return (vmIp != "" && !vmIp.contains("Warning") && vmIp != "127.0.0.1")
                                 }
                             }
-
-                            // Zapisujemy IP do pliku dla następnego etapu (Deploy)
-                            writeFile(file: "vm_ip.txt", text: vmIp)
-
-                            // Generujemy dynamicznie plik inventory dla Ansible
-                            echo "Generowanie pliku inventory dla Ansible..."
-                            writeFile(
-                                file: "../../${ANSIBLE_DIR}/inventory/hosts.ini",
-                                text: """[Endpoints]
-${vmIp} ansible_user=ubuntu ansible_ssh_private_key_file=${SSH_KEY}
-
-[Endpoints:vars]
-ansible_ssh_common_args='-o StrictHostKeyChecking=no'
-"""
-                            )
+                            
+                            writeFile(file: "${WORKSPACE}/vm_ip.txt", text: vmIp) 
                         }
-                    }
-                }
-            }
+                    } 
+                } 
+            } 
         }
 
         stage('Deploy') {
             when { expression { return params.RUN_DEPLOY } }
             steps {
                 withCredentials([
-                    sshUserPrivateKey(credentialsId: 'ansible-ssh-key', keyFileVariable: 'SSH_KEY')
+                    sshUserPrivateKey(credentialsId: 'ansible-ssh-key', keyFileVariable: 'SSH_KEY'),
+                    string(credentialsId: 'duckdns-token', variable: 'DUCKDNS_TOKEN')
                 ]) {
                     script {
                         def targetIp = ""
-                        
-                        if (params.PROVISION_INFRA) {
-                            targetIp = readFile("${TERRAFORM_DIR}/vm_ip.txt").trim()
-                        } else {
-                            targetIp = sh(script: "terraform -chdir=${TERRAFORM_DIR} output -raw vm_ip 2>/dev/null || cat ${TERRAFORM_DIR}/vm_ip.txt 2>/dev/null || echo ''", returnStdout: true).trim()
-                        }
-
-                        if (!targetIp || targetIp == "") {
-                            error "Brak adresu IP docelowego serwera!"
-                        }
+                            if (fileExists("${WORKSPACE}/vm_ip.txt")) {
+                                targetIp = readFile("${WORKSPACE}/vm_ip.txt").trim()
+                            } else {
+                                error "Nie odnaleziono pliku ${WORKSPACE}/vm_ip.txt! Czy Terraform zadziałał poprawnie?"
+                            }
 
                         writeFile(
                             file: "${ANSIBLE_DIR}/inventory/hosts.ini",
                             text: """[Endpoints]
-${targetIp} ansible_user=ubuntu ansible_ssh_private_key_file=${SSH_KEY}
+                                    ${targetIp} ansible_user=ubuntu ansible_ssh_private_key_file=${SSH_KEY}
 
-[Endpoints:vars]
-ansible_ssh_common_args='-o StrictHostKeyChecking=no'
-"""
+                                    [Endpoints:vars]
+                                    ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+                                """
                         )
-
-                        echo "Czekam na gotowość SSH na ${targetIp}..."
-                        sh """
-                            timeout 120 bash -c '
-                                until ansible Endpoints \
-                                -i ${ANSIBLE_DIR}/inventory/hosts.ini \
-                                --private-key=${SSH_KEY} \
-                                -m ping -vvv; do
-                                    echo "SSH nie odpowiada, ponawiam za 5s..."
-                                    sleep 5
-                                done
-                            '
-                        """
 
                         sh """
                             ansible-playbook ${ANSIBLE_DIR}/playbook.yml \
                                 --private-key=${SSH_KEY} \
                                 -i ${ANSIBLE_DIR}/inventory/hosts.ini \
-                                --extra-vars "image_name=${REGISTRY_IMAGE}"
+                                --extra-vars "image_name=${REGISTRY_IMAGE} duckdns_token=${DUCKDNS_TOKEN}"
                         """
                     }
                 }
             }
         }
-    }
+    } 
 
     post {
         always {
