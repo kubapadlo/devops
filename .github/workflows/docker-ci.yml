@@ -1,0 +1,42 @@
+name: simple-dockerCI
+
+# Uruchamiane ręcznie lub po pushu na ite_dev
+on:
+  workflow_dispatch:
+  push:
+    branches: [ite_dev]
+
+jobs:
+  # 1) Testy
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+
+  # 2) Build obrazu, 3) uruchomienie kontenera
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 2) Budowanie obrazu Docker
+      - name: Build image
+        run: docker build -t app:ci .
+
+      # 3) Uruchomienie obrazu w kontenerze + prosty health check
+      - name: Run container
+        run: |
+          docker run -d --name app -p 3000:3000 app:ci
+          curl --retry 10 --retry-delay 2 --retry-connrefused -fsS http://localhost:3000 > /dev/null
+          echo "Kontener odpowiada na porcie 3000"
+          docker rm -f app
